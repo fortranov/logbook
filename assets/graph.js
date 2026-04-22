@@ -49,7 +49,7 @@
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
     // Grid
-    ctx.strokeStyle = '#e8edf2';
+    ctx.strokeStyle = '#d6dce5';
     ctx.lineWidth = 1;
     const step = 50 * vscale;
     const offX = ((-vx * vscale) + canvas.width / 2) % step;
@@ -106,17 +106,21 @@
       // Label
       const fontSize = Math.max(9, Math.round(12 * vscale));
       ctx.font = `600 ${fontSize}px system-ui,sans-serif`;
-      ctx.fillStyle = '#fff';
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      // If name fits in circle, put inside; otherwise below
       const maxW = r * 1.7;
       const tw   = ctx.measureText(l.name).width;
       if (tw <= maxW) {
+        // Inside circle — white on dark node
+        ctx.fillStyle = '#fff';
         ctx.fillText(l.name, sx, sy);
       } else {
-        const small = Math.max(8, Math.round(10 * vscale));
-        ctx.font = `600 ${small}px system-ui,sans-serif`;
-        ctx.fillText(l.name, sx, sy);
+        // Below circle — dark text with light pill background
+        const labelY = sy + r + fontSize * 0.9 + 2;
+        const pad = 3;
+        ctx.fillStyle = 'rgba(255,255,255,0.88)';
+        ctx.fillRect(sx - tw/2 - pad, labelY - fontSize/2 - pad, tw + pad*2, fontSize + pad*2);
+        ctx.fillStyle = '#1a2744';
+        ctx.fillText(l.name, sx, labelY);
       }
     }
   }
