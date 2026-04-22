@@ -89,8 +89,8 @@ async function loadLogbook() {
       <td>${fmt(r.odometer)}</td>
       <td>${fmt(r.daily_mileage)}</td>
       <td>${fmt(r.since_to2)}</td>
-      <td>${r.fuel_spent != null ? fmtFuel(r.fuel_spent) : '<span class="dash">—</span>'}</td>
-      <td>${r.fuel_refueled != null ? fmtFuel(r.fuel_refueled) : '<span class="dash">—</span>'}</td>
+      <td>${r.entry_type === 'waybill' ? fmtFuel(r.fuel_spent) : '<span class="dash">—</span>'}</td>
+      <td>${r.entry_type === 'waybill' ? fmtFuel(r.fuel_refueled) : '<span class="dash">—</span>'}</td>
       <td>${fmtFuel(r.fuel_remaining)}</td>
       <td>${wbCell}</td>
     </tr>`;
