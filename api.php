@@ -60,7 +60,7 @@ function actionSaveSettings(PDO $db): bool {
 
 function actionGetLogbook(PDO $db): array {
     return $db->query("
-        SELECT l.*, w.number AS waybill_number, w.fuel_refueled AS fuel_refueled
+        SELECT l.*, w.number AS waybill_number, w.fuel_refueled AS fuel_refueled, w.fuel_spent AS fuel_spent
         FROM logbook l
         LEFT JOIN waybills w ON l.waybill_id = w.id
         ORDER BY l.id ASC
@@ -518,16 +518,16 @@ function buildSegments(array $path, array $adj, string $refuelTime, float $total
     $departMin      = $refuelMin - (int)round($fraction * $totalMinutes);
     if ($departMin < 5 * 60) $departMin = 5 * 60;
 
-    $segs = [];
+    $segs    = [];
     $cumDist = 0.0;
 
     for ($i = 0; $i < count($path) - 1; $i++) {
-        $fid     = $path[$i];
-        $tid     = $path[$i + 1];
-        $d       = edgeDist($adj, $fid, $tid);
-        $startM  = $departMin + (int)round($cumDist / $speed * 60);
-        $endM    = $departMin + (int)round(($cumDist + $d) / $speed * 60);
-        $segs[]  = [
+        $fid    = $path[$i];
+        $tid    = $path[$i + 1];
+        $d      = edgeDist($adj, $fid, $tid);
+        $startM = $departMin + (int)round($cumDist / $speed * 60);
+        $endM   = $departMin + (int)round(($cumDist + $d) / $speed * 60);
+        $segs[] = [
             'from_id'    => $fid,
             'to_id'      => $tid,
             'start_time' => minsToTime($startM),
@@ -536,6 +536,23 @@ function buildSegments(array $path, array $adj, string $refuelTime, float $total
         ];
         $cumDist += $d;
     }
+
+    // Add 15 min stop to the segment containing refuel time, shift subsequent segments
+    $shifted = false;
+    for ($i = 0; $i < count($segs); $i++) {
+        [$sh, $sm] = explode(':', $segs[$i]['start_time']);
+        [$eh, $em] = explode(':', $segs[$i]['end_time']);
+        $sMin = (int)$sh * 60 + (int)$sm;
+        $eMin = (int)$eh * 60 + (int)$em;
+        if (!$shifted && $sMin <= $refuelMin && $refuelMin < $eMin) {
+            $segs[$i]['end_time'] = minsToTime($eMin + 15);
+            $shifted = true;
+        } elseif ($shifted) {
+            $segs[$i]['start_time'] = minsToTime($sMin + 15);
+            $segs[$i]['end_time']   = minsToTime($eMin + 15);
+        }
+    }
+
     return $segs;
 }
 

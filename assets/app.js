@@ -38,6 +38,13 @@ function fmt(v, dec = 1) {
   return parseFloat(v).toFixed(dec);
 }
 
+function fmtFuel(v) {
+  if (v === null || v === undefined || v === '') return '<span class="dash">—</span>';
+  const n = parseFloat(v);
+  if (isNaN(n)) return '<span class="dash">—</span>';
+  return Math.trunc(n).toString();
+}
+
 function fmtDate(d) {
   if (!d) return '—';
   // d is YYYY-MM-DD
@@ -82,9 +89,9 @@ async function loadLogbook() {
       <td>${fmt(r.odometer)}</td>
       <td>${fmt(r.daily_mileage)}</td>
       <td>${fmt(r.since_to2)}</td>
-      <td>${r.daily_fuel !== null && r.daily_fuel !== '' ? (parseFloat(r.daily_fuel) >= 0 ? '+' : '') + fmt(r.daily_fuel) : '<span class="dash">—</span>'}</td>
-      <td>${r.fuel_refueled ? fmt(r.fuel_refueled) : '<span class="dash">—</span>'}</td>
-      <td>${fmt(r.fuel_remaining)}</td>
+      <td>${r.fuel_spent != null ? fmtFuel(r.fuel_spent) : '<span class="dash">—</span>'}</td>
+      <td>${r.fuel_refueled != null ? fmtFuel(r.fuel_refueled) : '<span class="dash">—</span>'}</td>
+      <td>${fmtFuel(r.fuel_remaining)}</td>
       <td>${wbCell}</td>
     </tr>`;
   }).join('');
@@ -174,10 +181,10 @@ async function loadWaybill(wid) {
       <table>
         <thead><tr><th>Остаток до (л)</th><th>Заправлено (л)</th><th>Израсходовано (л)</th><th>Остаток после (л)</th></tr></thead>
         <tbody><tr>
-          <td>${fmt(w.fuel_before)}</td>
-          <td>${fmt(w.fuel_refueled)}</td>
-          <td>${fmt(w.fuel_spent)}</td>
-          <td>${fmt(w.fuel_after)}</td>
+          <td>${fmtFuel(w.fuel_before)}</td>
+          <td>${fmtFuel(w.fuel_refueled)}</td>
+          <td>${fmtFuel(w.fuel_spent)}</td>
+          <td>${fmtFuel(w.fuel_after)}</td>
         </tr></tbody>
       </table>
       </div>
