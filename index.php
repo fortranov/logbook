@@ -43,16 +43,18 @@ if (!in_array($page, $allowed, true)) $page = 'logbook';
 <table id="logbook-table">
   <thead>
     <tr>
-      <th rowspan="2">Дата</th>
+      <th rowspan="2">Число</th>
       <th rowspan="2">Одометр, км</th>
-      <th colspan="2">Пробег</th>
-      <th rowspan="2">Остаток бензина, л</th>
-      <th rowspan="2">Бензин за сутки, л</th>
+      <th colspan="2" style="text-align:center">Пробег</th>
+      <th colspan="3" style="text-align:center">Бензин</th>
       <th rowspan="2">Путевой лист</th>
     </tr>
     <tr>
       <th>за сутки</th>
       <th>от ТО-2</th>
+      <th>расход</th>
+      <th>заправлено</th>
+      <th>остаток</th>
     </tr>
   </thead>
   <tbody id="logbook-body"></tbody>

@@ -70,7 +70,7 @@ async function loadLogbook() {
   const rows = await api('get_logbook');
   const tbody = $('logbook-body');
   if (!rows.length) {
-    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:#999;padding:24px">Записей нет</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:#999;padding:24px">Записей нет</td></tr>';
     return;
   }
   tbody.innerHTML = rows.map(r => {
@@ -82,8 +82,9 @@ async function loadLogbook() {
       <td>${fmt(r.odometer)}</td>
       <td>${fmt(r.daily_mileage)}</td>
       <td>${fmt(r.since_to2)}</td>
-      <td>${fmt(r.fuel_remaining)}</td>
       <td>${r.daily_fuel !== null && r.daily_fuel !== '' ? (parseFloat(r.daily_fuel) >= 0 ? '+' : '') + fmt(r.daily_fuel) : '<span class="dash">—</span>'}</td>
+      <td>${r.fuel_refueled ? fmt(r.fuel_refueled) : '<span class="dash">—</span>'}</td>
+      <td>${fmt(r.fuel_remaining)}</td>
       <td>${wbCell}</td>
     </tr>`;
   }).join('');

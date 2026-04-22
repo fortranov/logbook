@@ -60,7 +60,7 @@ function actionSaveSettings(PDO $db): bool {
 
 function actionGetLogbook(PDO $db): array {
     return $db->query("
-        SELECT l.*, w.number AS waybill_number
+        SELECT l.*, w.number AS waybill_number, w.fuel_refueled AS fuel_refueled
         FROM logbook l
         LEFT JOIN waybills w ON l.waybill_id = w.id
         ORDER BY l.id ASC
