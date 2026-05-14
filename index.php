@@ -79,6 +79,7 @@ if (!in_array($page, $allowed, true)) $page = 'logbook';
 <div id="modal-wb" class="modal-overlay" hidden>
   <div class="modal-box">
     <h2>Создать путевой лист</h2>
+    <label>Дата<input type="date" id="wb-date"></label>
     <label>Номер путевого листа<input type="text"   id="wb-number"></label>
     <label>Заправлено бензина (л)<input type="number" id="wb-fuel" min="0.1" step="0.1"></label>
     <label>Время заправки<input type="time" id="wb-time" value="12:00"></label>

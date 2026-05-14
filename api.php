@@ -26,6 +26,7 @@ function dispatch(PDO $db, string $action): mixed {
         'get_logbook'         => actionGetLogbook($db),
         'add_checkpoint'      => actionAddCheckpoint($db),
         'create_waybill'      => actionCreateWaybill($db),
+        'delete_waybill'      => actionDeleteWaybill($db),
         'get_waybill'         => actionGetWaybill($db),
         'regen_route'         => actionRegenRoute($db),
         'get_locations'       => actionGetLocations($db),
@@ -92,13 +93,15 @@ function pp(string $key): ?float {
 }
 
 function actionCreateWaybill(PDO $db): array {
-    $number      = trim($_POST['number']       ?? '');
+    $number       = trim($_POST['number']        ?? '');
     $fuelRefueled = (float)($_POST['fuel_refueled'] ?? 0);
-    $refuelTime  = trim($_POST['refuel_time']  ?? '');
+    $refuelTime   = trim($_POST['refuel_time']   ?? '');
+    $date         = trim($_POST['date']          ?? '');
+    if (!$date) $date = date('Y-m-d');
 
-    if (!$number)        throw new \RuntimeException('Номер путевого листа обязателен');
+    if (!$number)           throw new \RuntimeException('Номер путевого листа обязателен');
     if ($fuelRefueled <= 0) throw new \RuntimeException('Количество топлива > 0');
-    if (!$refuelTime)    throw new \RuntimeException('Время заправки обязательно');
+    if (!$refuelTime)       throw new \RuntimeException('Время заправки обязательно');
 
     $prev          = lastLogEntry($db);
     $odomBefore    = (float)($prev['odometer']       ?? 0);
@@ -118,8 +121,8 @@ function actionCreateWaybill(PDO $db): array {
     $db->prepare("
         INSERT INTO waybills (number,date,refuel_time,odometer_before,odometer_after,daily_mileage,
                               fuel_refueled,fuel_spent,fuel_before,fuel_after)
-        VALUES (?,date('now','localtime'),?,?,?,?,?,?,?,?)
-    ")->execute([$number, $refuelTime, $odomBefore, $odomAfter, $dist,
+        VALUES (?,?,?,?,?,?,?,?,?,?)
+    ")->execute([$number, $date, $refuelTime, $odomBefore, $odomAfter, $dist,
                  $fuelRefueled, $fuelSpent, $fuelBefore, $fuelAfter]);
     $wid = (int)$db->lastInsertId();
 
@@ -128,10 +131,26 @@ function actionCreateWaybill(PDO $db): array {
     $db->prepare("
         INSERT INTO logbook (entry_type,odometer,daily_mileage,since_to2,fuel_remaining,daily_fuel,
                              waybill_id,entry_date,entry_time)
-        VALUES ('waybill',?,?,?,?,?,?,date('now','localtime'),time('now','localtime'))
-    ")->execute([$odomAfter, $dist, $to2After, $fuelAfter, $fuelRefueled - $fuelSpent, $wid]);
+        VALUES ('waybill',?,?,?,?,?,?,?,time('now','localtime'))
+    ")->execute([$odomAfter, $dist, $to2After, $fuelAfter, $fuelRefueled - $fuelSpent, $wid, $date]);
 
     return ['waybill_id' => $wid];
+}
+
+function actionDeleteWaybill(PDO $db): array {
+    $id = (int)($_POST['id'] ?? 0);
+    if (!$id) throw new \RuntimeException('Неверный ID');
+
+    $stmt = $db->prepare("SELECT id FROM waybills WHERE id=?");
+    $stmt->execute([$id]);
+    if (!$stmt->fetch()) throw new \RuntimeException('Путевой лист не найден');
+
+    // Delete logbook entry first to satisfy FK constraint
+    $db->prepare("DELETE FROM logbook WHERE waybill_id=?")->execute([$id]);
+    // route_segments CASCADE on waybill delete
+    $db->prepare("DELETE FROM waybills WHERE id=?")->execute([$id]);
+
+    return actionGetLogbook($db);
 }
 
 // ─── Waybill ───────────────────────────────────────────────────────────────

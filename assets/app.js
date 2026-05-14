@@ -68,22 +68,38 @@ document.addEventListener('click', e => {
 function initLogbook() {
   loadLogbook();
   $('btn-checkpoint').addEventListener('click', () => openModal('modal-cp'));
-  $('btn-waybill').addEventListener('click', () => openModal('modal-wb'));
+  $('btn-waybill').addEventListener('click', () => {
+    $('wb-date').value = new Date().toISOString().slice(0, 10);
+    openModal('modal-wb');
+  });
   $('cp-save').addEventListener('click', saveCheckpoint);
   $('wb-save').addEventListener('click', saveWaybill);
+  $('logbook-body').addEventListener('click', e => {
+    const btn = e.target.closest('.btn-del-wb');
+    if (btn) deleteWaybill(parseInt(btn.dataset.id), btn.dataset.number);
+  });
 }
 
 async function loadLogbook() {
   const rows = await api('get_logbook');
+  renderLogbook(rows);
+}
+
+function renderLogbook(rows) {
   const tbody = $('logbook-body');
   if (!rows.length) {
     tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:#999;padding:24px">Записей нет</td></tr>';
     return;
   }
   tbody.innerHTML = rows.map(r => {
-    const wbCell = r.waybill_id
-      ? `<a href="?page=waybill&id=${r.waybill_id}">${escHtml(r.waybill_number || r.waybill_id)}</a>`
-      : '<span class="dash">—</span>';
+    let wbCell;
+    if (r.waybill_id) {
+      const num = escHtml(r.waybill_number || r.waybill_id);
+      wbCell = `<a href="?page=waybill&id=${r.waybill_id}">${num}</a>`
+             + `<button class="btn-del-wb" data-id="${r.waybill_id}" data-number="${num}" title="Удалить путевой лист">✕</button>`;
+    } else {
+      wbCell = '<span class="dash">—</span>';
+    }
     return `<tr>
       <td>${fmtDate(r.entry_date)}</td>
       <td>${fmt(r.odometer)}</td>
@@ -92,7 +108,7 @@ async function loadLogbook() {
       <td>${r.entry_type === 'waybill' ? fmtFuel(r.fuel_spent) : '<span class="dash">—</span>'}</td>
       <td>${r.entry_type === 'waybill' ? fmtFuel(r.fuel_refueled) : '<span class="dash">—</span>'}</td>
       <td>${fmtFuel(r.fuel_remaining)}</td>
-      <td>${wbCell}</td>
+      <td class="wb-cell">${wbCell}</td>
     </tr>`;
   }).join('');
 }
@@ -115,6 +131,7 @@ async function saveWaybill() {
   errEl.textContent = '';
   try {
     const d = await api('create_waybill', {
+      date:          $('wb-date').value,
       number:        $('wb-number').value,
       fuel_refueled: $('wb-fuel').value,
       refuel_time:   $('wb-time').value,
@@ -122,10 +139,18 @@ async function saveWaybill() {
     closeModal('modal-wb');
     ['wb-number','wb-fuel'].forEach(id => $(id).value = '');
     $('wb-time').value = '12:00';
+    $('wb-date').value = '';
     await loadLogbook();
-    // Navigate to new waybill
     window.location.href = `?page=waybill&id=${d.waybill_id}`;
   } catch(e) { errEl.textContent = e.message; }
+}
+
+async function deleteWaybill(id, number) {
+  if (!confirm(`Удалить путевой лист «${number}»?\nЭто действие нельзя отменить.`)) return;
+  try {
+    const rows = await api('delete_waybill', { id }, 'POST');
+    renderLogbook(rows);
+  } catch(e) { alert(e.message); }
 }
 
 /* ══════════ WAYBILL DETAIL PAGE ══════════ */

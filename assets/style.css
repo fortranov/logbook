@@ -309,3 +309,24 @@ tbody td a:hover { text-decoration: underline; }
 /* ── Misc ── */
 .tag-city        { color: #1565c0; font-weight: 600; }
 .tag-countryside { color: #2e7d32; font-weight: 600; }
+
+/* ── Waybill cell with delete button ── */
+td.wb-cell { white-space: nowrap; }
+.btn-del-wb {
+  padding: 1px 5px;
+  font-size: 11px;
+  line-height: 1.4;
+  background: transparent;
+  color: #b0bec5;
+  border: 1px solid #b0bec5;
+  border-radius: 3px;
+  margin-left: 6px;
+  cursor: pointer;
+  transition: background .15s, color .15s, border-color .15s;
+  vertical-align: middle;
+}
+.btn-del-wb:hover {
+  background: #c0392b;
+  color: #fff;
+  border-color: #c0392b;
+}
