@@ -113,10 +113,11 @@ function actionCreateWaybill(PDO $db): array {
     if (!$route) throw new \RuntimeException('Не удалось построить маршрут. Добавьте точки и рёбра в «Граф локаций».');
 
     $dist      = $route['totalDist'];
-    $fuelSpent = $route['fuelSpent'];
+    $fuelSpent = round($route['fuelSpent'], 1);
     $odomAfter = $odomBefore + $dist;
     $to2After  = $to2Before  + $dist;
-    $fuelAfter = round($fuelBefore + $fuelRefueled - $fuelSpent, 2);
+    $fuelAfter = round($fuelBefore + $fuelRefueled - $fuelSpent, 1);
+    $dailyFuel = round($fuelRefueled - $fuelSpent, 1);
 
     $db->prepare("
         INSERT INTO waybills (number,date,refuel_time,odometer_before,odometer_after,daily_mileage,
@@ -132,7 +133,7 @@ function actionCreateWaybill(PDO $db): array {
         INSERT INTO logbook (entry_type,odometer,daily_mileage,since_to2,fuel_remaining,daily_fuel,
                              waybill_id,entry_date,entry_time)
         VALUES ('waybill',?,?,?,?,?,?,?,time('now','localtime'))
-    ")->execute([$odomAfter, $dist, $to2After, $fuelAfter, $fuelRefueled - $fuelSpent, $wid, $date]);
+    ")->execute([$odomAfter, $dist, $to2After, $fuelAfter, $dailyFuel, $wid, $date]);
 
     return ['waybill_id' => $wid];
 }
@@ -189,9 +190,9 @@ function actionRegenRoute(PDO $db): array {
     if (!$route) throw new \RuntimeException('Не удалось построить новый маршрут');
 
     $dist      = $route['totalDist'];
-    $fuelSpent = $route['fuelSpent'];
+    $fuelSpent = round($route['fuelSpent'], 1);
     $odomAfter = (float)$w['odometer_before'] + $dist;
-    $fuelAfter = round((float)$w['fuel_before'] + (float)$w['fuel_refueled'] - $fuelSpent, 2);
+    $fuelAfter = round((float)$w['fuel_before'] + (float)$w['fuel_refueled'] - $fuelSpent, 1);
 
     $db->prepare("DELETE FROM route_segments WHERE waybill_id=?")->execute([$id]);
     $db->prepare("
@@ -209,7 +210,7 @@ function actionRegenRoute(PDO $db): array {
         $prev->execute([$lid]);
         $pRow     = $prev->fetch();
         $to2After = ((float)($pRow['since_to2'] ?? 0)) + $dist;
-        $dailyFuel = (float)$w['fuel_refueled'] - $fuelSpent;
+        $dailyFuel = round((float)$w['fuel_refueled'] - $fuelSpent, 1);
         $db->prepare("
             UPDATE logbook SET odometer=?,daily_mileage=?,since_to2=?,fuel_remaining=?,daily_fuel=? WHERE id=?
         ")->execute([$odomAfter, $dist, $to2After, $fuelAfter, $dailyFuel, $lid]);
