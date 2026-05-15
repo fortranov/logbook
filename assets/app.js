@@ -42,7 +42,8 @@ function fmtFuel(v) {
   if (v === null || v === undefined || v === '') return '<span class="dash">—</span>';
   const n = parseFloat(v);
   if (isNaN(n)) return '<span class="dash">—</span>';
-  return (Math.trunc(n * 10) / 10).toFixed(1);
+  // Round to 2dp first to eliminate floating-point noise, then truncate to 1dp
+  return (Math.trunc(Math.round(n * 100) / 10) / 10).toFixed(1);
 }
 
 function fmtDate(d) {

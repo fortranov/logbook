@@ -116,7 +116,7 @@ function actionCreateWaybill(PDO $db): array {
     $fuelSpent = $route['fuelSpent'];
     $odomAfter = $odomBefore + $dist;
     $to2After  = $to2Before  + $dist;
-    $fuelAfter = $fuelBefore + $fuelRefueled - $fuelSpent;
+    $fuelAfter = round($fuelBefore + $fuelRefueled - $fuelSpent, 2);
 
     $db->prepare("
         INSERT INTO waybills (number,date,refuel_time,odometer_before,odometer_after,daily_mileage,
@@ -191,7 +191,7 @@ function actionRegenRoute(PDO $db): array {
     $dist      = $route['totalDist'];
     $fuelSpent = $route['fuelSpent'];
     $odomAfter = (float)$w['odometer_before'] + $dist;
-    $fuelAfter = (float)$w['fuel_before'] + (float)$w['fuel_refueled'] - $fuelSpent;
+    $fuelAfter = round((float)$w['fuel_before'] + (float)$w['fuel_refueled'] - $fuelSpent, 2);
 
     $db->prepare("DELETE FROM route_segments WHERE waybill_id=?")->execute([$id]);
     $db->prepare("
