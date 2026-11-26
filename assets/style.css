@@ -330,3 +330,101 @@ td.wb-cell { white-space: nowrap; }
   color: #fff;
   border-color: #c0392b;
 }
+
+/* ── Vehicle selection ── */
+.top-nav { flex-wrap: wrap; align-items: center; }
+.vehicle-menu { position: relative; margin-left: auto; padding: 6px 0; }
+.vehicle-menu summary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  cursor: pointer;
+  list-style: none;
+}
+.vehicle-menu summary::-webkit-details-marker { display: none; }
+.vehicle-chevron {
+  width: 8px;
+  height: 8px;
+  border: solid currentColor;
+  border-width: 0 2px 2px 0;
+  transform: translateY(-2px) rotate(45deg);
+}
+.vehicle-menu[open] .vehicle-chevron { transform: translateY(2px) rotate(225deg); }
+.vehicle-plate {
+  display: inline-flex;
+  align-items: stretch;
+  gap: 5px;
+  padding: 2px 6px;
+  border: 1px solid #17202c;
+  border-radius: 5px;
+  box-shadow: 0 0 0 1px #d4dbe1, inset 0 0 0 1px #17202c;
+  background: #fff;
+  color: #17202c;
+  font: bold 19px/1.45 "Arial Narrow", Arial, sans-serif;
+  letter-spacing: .06em;
+}
+.plate-region {
+  padding-left: 5px;
+  border-left: 1px solid #17202c;
+  font-size: 14px;
+  line-height: 1.15;
+  text-align: center;
+}
+.plate-region small {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  font-size: 8px;
+  letter-spacing: 0;
+}
+.plate-region i {
+  width: 10px;
+  height: 7px;
+  border: 1px solid #a2acb7;
+  background: linear-gradient(#fff 33%, #1751a9 33% 66%, #d52b1e 66%);
+}
+.vehicle-options {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 10;
+  min-width: min(275px, 90vw);
+  max-height: 70vh;
+  overflow: auto;
+  padding: 6px;
+  border: 1px solid #d8e0e9;
+  border-radius: 6px;
+  background: #fff;
+  color: #1e3a5f;
+  box-shadow: 0 4px 16px #1e3a5f33;
+}
+.vehicle-option { display: flex; align-items: center; gap: 4px; }
+.vehicle-options .vehicle-option a {
+  flex: 1;
+  padding: 8px;
+  border: 0;
+  border-radius: 4px;
+  color: #1e3a5f;
+}
+.vehicle-option a:hover, .vehicle-option a[aria-current] { background: #eaf2fc; }
+.vehicle-options .vehicle-delete {
+  background: transparent;
+  color: #9d3026;
+  padding: 4px 9px;
+  font-size: 18px;
+}
+.vehicle-options .vehicle-delete:hover { background: #fae9e6; }
+.vehicle-options > button { width: 100%; margin-top: 4px; text-align: left; }
+.vehicle-dialog {
+  width: min(360px, calc(100vw - 32px));
+  margin: auto;
+  padding: 20px;
+  border: 0;
+  border-radius: 8px;
+  color: #1e3a5f;
+}
+.vehicle-dialog::backdrop { background: #15263888; }
+.vehicle-dialog h2 { margin-bottom: 12px; font-size: 18px; }
+.vehicle-dialog input { display: block; width: 100%; margin: 4px 0 8px; }
+#vehicle-error { color: #a5271c; }

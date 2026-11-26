@@ -206,7 +206,7 @@
       const loc = locs.find(l => l.id === dragging.id);
       if (loc) {
         // Save position to server
-        await apiCall('update_location_pos', { id: loc.id, x: Math.round(loc.x), y: Math.round(loc.y) });
+        await api('update_location_pos', { id: loc.id, x: Math.round(loc.x), y: Math.round(loc.y) }, 'POST');
       }
       dragging = null;
     }
@@ -216,7 +216,7 @@
   canvas.addEventListener('mouseleave', async () => {
     if (dragging) {
       const loc = locs.find(l => l.id === dragging.id);
-      if (loc) await apiCall('update_location_pos', { id: loc.id, x: Math.round(loc.x), y: Math.round(loc.y) });
+      if (loc) await api('update_location_pos', { id: loc.id, x: Math.round(loc.x), y: Math.round(loc.y) }, 'POST');
       dragging = null;
     }
     panning = null;
@@ -297,33 +297,9 @@
     gid('edit-fields').innerHTML = '';
   }
 
-  /* ── API wrapper (graph page uses plain fetch to avoid importing app.js deps) ── */
-  const spinner = document.getElementById('spinner');
-  async function apiCall(action, body = null, method = 'POST') {
-    spinner.hidden = false;
-    try {
-      let url = `api.php?action=${action}`;
-      const opts = {};
-      if (body && method === 'POST') {
-        opts.method = 'POST';
-        const fd = new FormData();
-        for (const [k, v] of Object.entries(body)) fd.append(k, v);
-        opts.body = fd;
-      } else if (body && method === 'GET') {
-        url += '&' + new URLSearchParams(body).toString();
-      }
-      const res = await fetch(url, opts);
-      const j   = await res.json();
-      if (!j.ok) throw new Error(j.error || 'Ошибка');
-      return j.data;
-    } finally {
-      spinner.hidden = true;
-    }
-  }
-
   /* ── Load & refresh ── */
   async function reload() {
-    const d = await apiCall('get_locations', null, 'GET');
+    const d = await api('get_locations', null, 'GET');
     locs  = d.locations.map(l => ({ ...l, id: parseInt(l.id), x: parseFloat(l.x), y: parseFloat(l.y), is_start: parseInt(l.is_start) }));
     edges = d.edges.map(e  => ({ ...e, id: parseInt(e.id), loc_a: parseInt(e.loc_a), loc_b: parseInt(e.loc_b), distance: parseFloat(e.distance) }));
     populateSelects();
@@ -380,7 +356,7 @@
     }
 
     try {
-      await apiCall('add_location', { name, type, from_id: fromId, distance: dist, x: Math.round(nx), y: Math.round(ny) });
+      await api('add_location', { name, type, from_id: fromId, distance: dist, x: Math.round(nx), y: Math.round(ny) }, 'POST');
       gid('loc-name').value = '';
       gid('loc-dist').value = '';
       graphMsg('Точка добавлена', false);
@@ -396,7 +372,7 @@
     if (!a || !b) { graphMsg('Выберите обе точки'); return; }
     if (!dist)    { graphMsg('Введите расстояние'); return; }
     try {
-      await apiCall('add_edge', { from_id: a, to_id: b, distance: dist });
+      await api('add_edge', { from_id: a, to_id: b, distance: dist }, 'POST');
       gid('edge-dist').value = '';
       graphMsg('Ребро добавлено', false);
       await reload();
@@ -409,7 +385,7 @@
     const type = gid('edit-type')?.value;
     if (!name) { graphMsg('Введите название'); return; }
     try {
-      await apiCall('update_location', { id, name, type });
+      await api('update_location', { id, name, type }, 'POST');
       hideEdit(); selNode = null;
       graphMsg('Сохранено', false);
       await reload();
@@ -419,7 +395,7 @@
   async function deleteNode(id) {
     if (!confirm('Удалить точку и все связанные рёбра?')) return;
     try {
-      await apiCall('delete_location', { id });
+      await api('delete_location', { id }, 'POST');
       hideEdit(); selNode = null;
       await reload();
     } catch(e) { graphMsg(e.message); }
@@ -429,7 +405,7 @@
     const dist = gid('edit-dist')?.value;
     if (!dist) { graphMsg('Введите расстояние'); return; }
     try {
-      await apiCall('update_edge', { id, distance: dist });
+      await api('update_edge', { id, distance: dist }, 'POST');
       hideEdit(); selEdge = null;
       graphMsg('Сохранено', false);
       await reload();
@@ -439,7 +415,7 @@
   async function deleteEdge(id) {
     if (!confirm('Удалить ребро?')) return;
     try {
-      await apiCall('delete_edge', { id });
+      await api('delete_edge', { id }, 'POST');
       hideEdit(); selEdge = null;
       await reload();
     } catch(e) { graphMsg(e.message); }

@@ -1,6 +1,8 @@
 /* ── Utility ── */
 
 const API = 'api.php';
+const vehicleId = document.getElementById('app').dataset.vehicle;
+const vehicleQuery = vehicleId ? '&vehicle=' + encodeURIComponent(vehicleId) : '';
 
 function $(id) { return document.getElementById(id); }
 
@@ -11,11 +13,12 @@ function spinner(on) {
 async function api(action, body = null, method = 'GET') {
   spinner(true);
   try {
-    let url = `${API}?action=${action}`;
+    let url = `${API}?action=${action}${vehicleQuery}`;
     const opts = { headers: {} };
 
     if (body && method === 'POST') {
       opts.method = 'POST';
+      opts.headers['X-Logbook-Request'] = '1';
       const fd = new FormData();
       for (const [k, v] of Object.entries(body)) fd.append(k, v);
       opts.body = fd;
@@ -96,7 +99,7 @@ function renderLogbook(rows) {
     let wbCell;
     if (r.waybill_id) {
       const num = escHtml(r.waybill_number || r.waybill_id);
-      wbCell = `<a href="?page=waybill&id=${r.waybill_id}">${num}</a>`
+      wbCell = `<a href="?page=waybill&id=${r.waybill_id}${vehicleQuery}">${num}</a>`
              + `<button class="btn-del-wb" data-id="${r.waybill_id}" data-number="${num}" title="Удалить путевой лист">✕</button>`;
     } else {
       wbCell = '<span class="dash">—</span>';
@@ -142,7 +145,7 @@ async function saveWaybill() {
     $('wb-time').value = '12:00';
     $('wb-date').value = '';
     await loadLogbook();
-    window.location.href = `?page=waybill&id=${d.waybill_id}`;
+    window.location.href = `?page=waybill&id=${d.waybill_id}${vehicleQuery}`;
   } catch(e) { errEl.textContent = e.message; }
 }
 
@@ -183,7 +186,7 @@ async function loadWaybill(wid) {
     </tr>`).join('');
 
   $('waybill-detail').innerHTML = `
-    <a class="back-link" href="?page=logbook">&#8592; Бортовой журнал</a>
+    <a class="back-link" href="?page=logbook${vehicleQuery}">&#8592; Бортовой журнал</a>
     <h1>Путевой лист № ${escHtml(w.number)}</h1>
     <p class="wb-meta">Дата: ${fmtDate(w.date)} &nbsp;|&nbsp; Время заправки: ${w.refuel_time}</p>
 
@@ -275,9 +278,76 @@ function escHtml(s) {
 
 function typeLabel(t) { return t === 'countryside' ? 'за городом' : 'город'; }
 
+function initVehicleMenu() {
+  const menu = document.querySelector('.vehicle-menu');
+  const dialog = $('vehicle-dialog');
+  const form = $('vehicle-form');
+  const input = $('vehicle-plate-input');
+  const error = $('vehicle-error');
+  const submit = form.querySelector('[type="submit"]');
+  let action;
+
+  for (const button of document.querySelectorAll('[data-vehicle-form]')) {
+    button.addEventListener('click', () => {
+      action = button.dataset.vehicleForm;
+      $('vehicle-dialog-title').textContent = action === 'add_vehicle'
+        ? 'Добавить автомобиль' : 'Указать госномер';
+      form.reset();
+      error.textContent = '';
+      menu.open = false;
+      dialog.showModal();
+      input.focus();
+    });
+  }
+  $('vehicle-cancel').addEventListener('click', () => dialog.close());
+  form.addEventListener('submit', async event => {
+    event.preventDefault();
+    submit.disabled = true;
+    error.textContent = '';
+    try {
+      const result = await api(action, { plate: input.value }, 'POST');
+      window.location.href = '?page=logbook&vehicle=' + encodeURIComponent(result.id);
+    } catch (err) {
+      error.textContent = err.message;
+      submit.disabled = false;
+    }
+  });
+
+  for (const button of document.querySelectorAll('[data-delete-vehicle]')) {
+    button.addEventListener('click', async () => {
+      const id = button.dataset.deleteVehicle;
+      if (!confirm(`Удалить автомобиль «${button.dataset.vehicleLabel}» и все записи его журнала?`)) return;
+      button.disabled = true;
+      try {
+        const result = await api('delete_vehicle', { id }, 'POST');
+        if (!result.files_removed) alert('Автомобиль удалён из списка, но не все файлы удалось удалить с сервера.');
+        if (id === vehicleId) {
+          window.location.href = '?page=logbook' + (result.id ? '&vehicle=' + encodeURIComponent(result.id) : '');
+        } else {
+          button.closest('.vehicle-option').remove();
+        }
+      } catch (err) {
+        alert(err.message);
+        button.disabled = false;
+      }
+    });
+  }
+
+  document.addEventListener('click', event => {
+    if (!menu.contains(event.target)) menu.open = false;
+  });
+  menu.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && menu.open) {
+      menu.open = false;
+      menu.querySelector('summary').focus();
+    }
+  });
+}
+
 /* ── Boot ── */
 
 (function boot() {
+  initVehicleMenu();
   const page = document.getElementById('app')?.dataset?.page;
   if (page === 'logbook')  initLogbook();
   if (page === 'waybill')  initWaybill();

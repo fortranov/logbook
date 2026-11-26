@@ -1,14 +1,36 @@
 <?php
 declare(strict_types=1);
-require_once __DIR__ . '/db.php';
+require_once __DIR__ . '/vehicles.php';
 
 // Only run as HTTP endpoint, not when included by other scripts
 if (basename($_SERVER['SCRIPT_FILENAME'] ?? '') === 'api.php') {
     header('Content-Type: application/json; charset=utf-8');
     $action = (string)($_REQUEST['action'] ?? '');
     try {
-        $db  = getDB();
-        $out = dispatch($db, $action);
+        header('Cache-Control: no-store');
+        $management = in_array($action, ['add_vehicle', 'assign_legacy_plate', 'delete_vehicle'], true);
+        if ($management && (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST'
+            || ($_SERVER['HTTP_X_LOGBOOK_REQUEST'] ?? '') !== '1')) {
+            throw new RuntimeException('Недопустимый запрос на изменение списка автомобилей');
+        }
+
+        $catalog = vehicleCatalog($management);
+        if ($management) {
+            $out = $action === 'delete_vehicle'
+                ? deleteVehicle($catalog)
+                : saveVehicle($catalog, $action === 'assign_legacy_plate');
+        } else {
+            $cars = listVehicles($catalog);
+            $id = $_GET['vehicle'] ?? array_key_first($cars);
+            if (!is_string($id) || !isset($cars[$id])) {
+                throw new RuntimeException('Автомобиль не найден. Откройте журнал заново.');
+            }
+            $path = vehiclePath($id);
+            if (!is_file($path)) {
+                throw new RuntimeException('Файл журнала автомобиля не найден');
+            }
+            $out = dispatch(openLogbook($path), $action);
+        }
         echo json_encode(['ok' => true, 'data' => $out], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
         http_response_code(400);

@@ -1,7 +1,19 @@
 <?php
 declare(strict_types=1);
-require_once __DIR__ . '/db.php';
-getDB(); // initialise database on first run
+require_once __DIR__ . '/vehicles.php';
+
+header('Cache-Control: no-store');
+$cars = listVehicles(vehicleCatalog());
+$requestedId = $_GET['vehicle'] ?? null;
+$selectedId = is_string($requestedId) && isset($cars[$requestedId])
+    ? $requestedId
+    : array_key_first($cars);
+if ($requestedId !== null && $requestedId !== $selectedId) {
+    header('Location: ?page=logbook');
+    exit;
+}
+$plate = $cars[$selectedId]['plate'] ?? null;
+$vehicleQuery = $selectedId === null ? '' : '&amp;vehicle=' . $selectedId;
 
 $page      = $_GET['page']      ?? 'logbook';
 $waybillId = (int)($_GET['id'] ?? 0);
@@ -20,16 +32,53 @@ if (!in_array($page, $allowed, true)) $page = 'logbook';
 
 <header>
   <nav class="top-nav">
-    <a href="?page=logbook"   class="<?= $page==='logbook'  ?'active':'' ?>">Бортовой журнал</a>
-    <a href="?page=graph"     class="<?= $page==='graph'    ?'active':'' ?>">Граф локаций</a>
-    <a href="?page=settings"  class="<?= $page==='settings' ?'active':'' ?>">Настройки</a>
+    <a href="?page=logbook<?= $vehicleQuery ?>"   class="<?= $page==='logbook'  ?'active':'' ?>">Бортовой журнал</a>
+    <a href="?page=graph<?= $vehicleQuery ?>"     class="<?= $page==='graph'    ?'active':'' ?>">Граф локаций</a>
+    <a href="?page=settings<?= $vehicleQuery ?>"  class="<?= $page==='settings' ?'active':'' ?>">Настройки</a>
+    <details class="vehicle-menu">
+      <summary aria-label="Выбор автомобиля">
+        <?php if ($plate !== null): ?>
+          <?php if (preg_match('/^([АВЕКМНОРСТУХ][0-9]{3}[АВЕКМНОРСТУХ]{2})([0-9]{2,3})$/uD', $plate, $parts)): ?>
+            <span class="vehicle-plate">
+              <span><?= htmlspecialchars($parts[1]) ?></span>
+              <span class="plate-region"><?= $parts[2] ?><small>RUS <i aria-hidden="true"></i></small></span>
+            </span>
+          <?php else: ?>
+            <span class="vehicle-plate"><?= htmlspecialchars($plate) ?></span>
+          <?php endif; ?>
+        <?php else: ?>
+          <span><?= $selectedId === null ? 'Автомобиль' : 'Без госномера' ?></span>
+        <?php endif; ?>
+        <span class="vehicle-chevron" aria-hidden="true"></span>
+      </summary>
+      <div class="vehicle-options">
+        <?php foreach ($cars as $car): ?>
+          <?php $label = htmlspecialchars($car['plate'] ?? 'Журнал без госномера'); ?>
+          <div class="vehicle-option">
+            <a href="?page=<?= $page === 'waybill' ? 'logbook' : $page ?>&amp;vehicle=<?= $car['id'] ?>"
+               <?= $car['id'] === $selectedId ? 'aria-current="true"' : '' ?>><?= $label ?></a>
+            <?php if ($car['plate'] === null): ?>
+              <button type="button" data-vehicle-form="assign_legacy_plate">Указать номер</button>
+            <?php endif; ?>
+            <button type="button" class="vehicle-delete" data-delete-vehicle="<?= $car['id'] ?>"
+                    data-vehicle-label="<?= $label ?>" aria-label="Удалить: <?= $label ?>" title="Удалить">×</button>
+          </div>
+        <?php endforeach; ?>
+        <button type="button" data-vehicle-form="add_vehicle">+ Добавить автомобиль</button>
+      </div>
+    </details>
   </nav>
 </header>
 
-<main id="app" data-page="<?= htmlspecialchars($page) ?>"
+<main id="app" data-page="<?= $selectedId === null ? '' : htmlspecialchars($page) ?>" data-vehicle="<?= $selectedId ?? '' ?>"
       <?= $waybillId ? 'data-waybill-id="'.(int)$waybillId.'"' : '' ?>>
 
-<?php if ($page === 'logbook'): ?>
+<?php if ($selectedId === null): ?>
+<div class="page-toolbar">
+  <h1>Бортовой журнал</h1>
+  <button type="button" data-vehicle-form="add_vehicle">Добавить автомобиль</button>
+</div>
+<?php elseif ($page === 'logbook'): ?>
 <!-- ══════════════ LOGBOOK ══════════════ -->
 <div class="page-toolbar">
   <h1>Бортовой журнал</h1>
@@ -175,10 +224,23 @@ if (!in_array($page, $allowed, true)) $page = 'logbook';
 
 </main>
 
+<dialog id="vehicle-dialog" class="vehicle-dialog">
+  <form id="vehicle-form">
+    <h2 id="vehicle-dialog-title">Добавить автомобиль</h2>
+    <label for="vehicle-plate-input">Госномер</label>
+    <input id="vehicle-plate-input" type="text" maxlength="24" placeholder="А123ВС 77" required>
+    <p id="vehicle-error" role="alert"></p>
+    <div class="modal-footer">
+      <button type="submit">Сохранить</button>
+      <button type="button" class="secondary" id="vehicle-cancel">Отмена</button>
+    </div>
+  </form>
+</dialog>
+
 <div id="spinner" class="spinner" hidden></div>
 
 <script src="assets/app.js"></script>
-<?php if ($page === 'graph'): ?>
+<?php if ($selectedId !== null && $page === 'graph'): ?>
 <script src="assets/graph.js"></script>
 <?php endif; ?>
 </body>

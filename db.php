@@ -1,19 +1,18 @@
 <?php
 declare(strict_types=1);
 
-function getDB(): PDO {
-    static $db = null;
-    if ($db !== null) return $db;
-
-    $dir = __DIR__ . '/data';
-    if (!is_dir($dir)) mkdir($dir, 0755, true);
-
-    $db = new PDO('sqlite:' . $dir . '/logbook.sqlite');
+function openDatabase(string $path): PDO {
+    $db = new PDO('sqlite:' . $path);
     $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
     $db->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+    $db->exec('PRAGMA busy_timeout = 5000');
     $db->exec('PRAGMA foreign_keys = ON');
-    $db->exec('PRAGMA journal_mode = WAL');
+    return $db;
+}
 
+function openLogbook(string $path): PDO {
+    $db = openDatabase($path);
+    $db->exec('PRAGMA journal_mode = WAL');
     initSchema($db);
     return $db;
 }

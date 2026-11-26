@@ -7,7 +7,10 @@ COPY . /var/www/html/
 
 RUN mkdir -p /var/www/html/data \
     && chown -R www-data:www-data /var/www/html/data \
-    && chmod 775 /var/www/html/data
+    && chmod 775 /var/www/html/data \
+    && printf '%s\n' '<Directory "/var/www/html/data">' '    Require all denied' '</Directory>' \
+       > /etc/apache2/conf-available/logbook-data.conf \
+    && a2enconf logbook-data
 
 RUN sed -i 's|/var/www/html|/var/www/html|g' /etc/apache2/sites-available/000-default.conf \
     && a2enmod rewrite
