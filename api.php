@@ -462,7 +462,8 @@ function generateRoute(
     }
 
     $dStart = dijkstraDist($adj, $startId);
-    if ($options === null || $targetDistance === null) {
+    $estimateMileage = $targetDistance === null;
+    if ($options === null || $estimateMileage) {
         // Use the same baseline walks for all four settings.
         $baselineSeed = $options === null ? $seed : 0;
         if ($baselineSeed !== null) mt_srand($baselineSeed);
@@ -484,24 +485,20 @@ function generateRoute(
         } else {
             mt_srand($seed);
         }
-        $route = optimizeRoute($adj, $startId, $dStart, $targetDistance, $options);
+        $route = selectRouteForMileage($adj, $startId, $dStart, $targetDistance, $options, $rate, $coeff, $fuelBudget);
         if ($route === null) return null;
-        $fuelSpent = routeFuel($targetDistance, $route['countryDistance'], $rate, $coeff);
-        if (!fuelFits($fuelSpent, $fuelBudget)) {
-            $canFinish = static function (float $covered, float $country) use (
-                $targetDistance, $rate, $coeff, $fuelBudget
-            ): bool {
-                // Assume all remaining distance uses the cheaper fuel rate.
-                if ($coeff < 1) $country += $targetDistance - $covered;
-                return fuelFits(routeFuel($targetDistance, $country, $rate, $coeff), $fuelBudget);
-            };
-            $route = optimizeRoute($adj, $startId, $dStart, $targetDistance, $options, $canFinish);
-            if ($route === null) {
-                throw new RuntimeException('Нет маршрута с этим километражем и остатком бензина не менее 1 л');
+
+        // A new waybill can use another mileage if only city routes fit the estimate.
+        if ($estimateMileage && $options['fuel_mode'] === 'consumption' && $route['countryDistance'] <= 0) {
+            $countryMileage = findAffordableCountryMileage($adj, $startId, $rate, $coeff, $fuelBudget);
+            if ($countryMileage !== null && $countryMileage !== $targetDistance) {
+                $countryRoute = selectRouteForMileage($adj, $startId, $dStart, $countryMileage, $options, $rate, $coeff, $fuelBudget);
+                if ($countryRoute !== null && $countryRoute['countryDistance'] > 0) {
+                    $route = $countryRoute;
+                    $targetDistance = $countryMileage;
+                }
             }
-            $fuelSpent = routeFuel($targetDistance, $route['countryDistance'], $rate, $coeff);
         }
-        $route['fuelSpent'] = $fuelSpent;
     }
 
     return [
@@ -509,6 +506,71 @@ function generateRoute(
         'totalDist' => $targetDistance,
         'fuelSpent' => round($route['fuelSpent'], 2),
     ];
+}
+
+function selectRouteForMileage(
+    array $adj,
+    int $startId,
+    array $dStart,
+    float $targetDistance,
+    array $options,
+    float $rate,
+    float $coeff,
+    float $fuelBudget
+): ?array {
+    $route = optimizeRoute($adj, $startId, $dStart, $targetDistance, $options);
+    if ($route === null) return null;
+    $fuelSpent = routeFuel($targetDistance, $route['countryDistance'], $rate, $coeff);
+    if (!fuelFits($fuelSpent, $fuelBudget)) {
+        $canFinish = static function (float $covered, float $country) use (
+            $targetDistance, $rate, $coeff, $fuelBudget
+        ): bool {
+            // Assume all remaining distance uses the cheaper fuel rate.
+            if ($coeff < 1) $country += $targetDistance - $covered;
+            return fuelFits(routeFuel($targetDistance, $country, $rate, $coeff), $fuelBudget);
+        };
+        $route = optimizeRoute($adj, $startId, $dStart, $targetDistance, $options, $canFinish);
+        if ($route === null) {
+            throw new RuntimeException('Нет маршрута с этим километражем и остатком бензина не менее 1 л');
+        }
+        $fuelSpent = routeFuel($targetDistance, $route['countryDistance'], $rate, $coeff);
+    }
+    $route['fuelSpent'] = $fuelSpent;
+    return $route;
+}
+
+function findAffordableCountryMileage(array $adj, int $startId, float $rate, float $coeff, float $fuelBudget): ?float {
+    // Find the least fuel needed to traverse a countryside edge and return to start.
+    $weighted = $adj;
+    foreach ($weighted as $node => $neighbors) {
+        foreach ($neighbors as $index => $edge) {
+            if ($edge['country']) $weighted[$node][$index]['dist'] *= $coeff;
+        }
+    }
+    $costFromStart = dijkstraDist($weighted, $startId);
+    $bestCost = PHP_FLOAT_MAX;
+    $bestEdge = null;
+    foreach ($weighted as $from => $neighbors) {
+        foreach ($neighbors as $edge) {
+            if (!$edge['country'] || $from >= $edge['to']) continue;
+            $cost = $costFromStart[$from] + $edge['dist'] + $costFromStart[$edge['to']];
+            if ($cost < $bestCost) {
+                $bestCost = $cost;
+                $bestEdge = [$from, $edge['to']];
+            }
+        }
+    }
+    if ($bestEdge === null || !fuelFits($bestCost * $rate / 100.0, $fuelBudget)) return null;
+
+    [$from, $to] = $bestEdge;
+    $distance = edgeDist($adj, $from, $to);
+    foreach ([$from, $to] as $endpoint) {
+        $path = dijkstraPath($weighted, $startId, $endpoint);
+        for ($i = 1; $i < count($path); $i++) {
+            $distance += edgeDist($adj, $path[$i - 1], $path[$i]);
+        }
+    }
+    return round($distance, 1);
 }
 
 function routeFuel(float $distance, float $country, float $rate, float $coeff): float {
