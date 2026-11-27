@@ -427,13 +427,12 @@ function generateRoute(
     $rate   = (float)($settings['season'] === 'summer' ? $settings['fuel_summer'] : $settings['fuel_winter']);
     $coeff  = (float)$settings['countryside_coeff'];
 
-    if ($seed !== null) mt_srand($seed);
-
     $dStart = dijkstraDist($adj, $startId);
     if ($options === null || $targetDistance === null) {
-        // The mileage estimate uses the same walks for all four settings.
-        $randomizer = $options === null ? null : new Random\Randomizer(new Random\Engine\Mt19937(0));
-        $baseline = findBaselineRoute($adj, $startId, $dStart, $locMap, $fuelRefueled, $rate, $coeff, $randomizer);
+        // Use the same baseline walks for all four settings.
+        $baselineSeed = $options === null ? $seed : 0;
+        if ($baselineSeed !== null) mt_srand($baselineSeed);
+        $baseline = findBaselineRoute($adj, $startId, $dStart, $locMap, $fuelRefueled, $rate, $coeff);
         if ($baseline === null) return null;
         $targetDistance = $baseline['totalDist'];
     }
@@ -441,6 +440,12 @@ function generateRoute(
     if ($options === null) {
         $route = $baseline;
     } else {
+        // Randomize route selection separately from the fixed mileage estimate.
+        if ($seed === null) {
+            mt_srand();
+        } else {
+            mt_srand($seed);
+        }
         $route = optimizeRoute($adj, $startId, $dStart, $targetDistance, $options);
         if ($route === null) return null;
         $countryKm = $route['countryDistance'];
@@ -462,8 +467,7 @@ function findBaselineRoute(
     array $locMap,
     float $fuelRefueled,
     float $rate,
-    float $coeff,
-    ?Random\Randomizer $randomizer
+    float $coeff
 ): ?array {
     $best     = null;
     $bestDiff = PHP_FLOAT_MAX;
@@ -473,7 +477,7 @@ function findBaselineRoute(
         $targetRate = ($att % 3 === 0) ? $rate : $rate * $coeff;
         $target     = $fuelRefueled * 100.0 / $targetRate;
 
-        $res = randomWalk($adj, $startId, $target, $dStart, $randomizer);
+        $res = randomWalk($adj, $startId, $target, $dStart);
         if (!$res) continue;
         [$path, $totalDist] = $res;
 
@@ -554,8 +558,7 @@ function randomWalk(
     array $adj,
     int $startId,
     float $target,
-    array $dStart,
-    ?Random\Randomizer $randomizer = null
+    array $dStart
 ): ?array {
     $path  = [$startId];
     $dist  = 0.0;
@@ -585,11 +588,7 @@ function randomWalk(
         }
 
         // Filter valid moves (won't overshoot by more than 30 km)
-        if ($randomizer === null) {
-            shuffle($neighbors);
-        } else {
-            $neighbors = $randomizer->shuffleArray($neighbors);
-        }
+        shuffle($neighbors);
         $valid = array_filter($neighbors, function($nb) use ($dist, $target, $dStart) {
             $nd = $dist + $nb['dist'] + ($dStart[$nb['to']] ?? PHP_FLOAT_MAX);
             return $nd <= $target + 30;
