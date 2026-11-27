@@ -1,6 +1,6 @@
 <?php
 declare(strict_types=1);
-require_once __DIR__ . '/vehicles.php';
+require_once __DIR__ . '/shared_graph.php';
 
 // Only run as HTTP endpoint, not when included by other scripts
 if (basename($_SERVER['SCRIPT_FILENAME'] ?? '') === 'api.php') {
@@ -15,12 +15,17 @@ if (basename($_SERVER['SCRIPT_FILENAME'] ?? '') === 'api.php') {
         }
 
         $catalog = vehicleCatalog($management);
+        $cars = listVehicles($catalog);
         if ($management) {
             $out = $action === 'delete_vehicle'
-                ? deleteVehicle($catalog)
+                ? deleteVehicle($catalog, $cars)
                 : saveVehicle($catalog, $action === 'assign_legacy_plate');
+        } elseif (in_array($action, [
+            'get_locations', 'add_location', 'update_location', 'delete_location',
+            'update_location_pos', 'add_edge', 'update_edge', 'delete_edge',
+        ], true)) {
+            $out = dispatchGraph(openSharedGraph($cars), $action);
         } else {
-            $cars = listVehicles($catalog);
             $id = $_GET['vehicle'] ?? array_key_first($cars);
             if (!is_string($id) || !isset($cars[$id])) {
                 throw new RuntimeException('Автомобиль не найден. Откройте журнал заново.');
@@ -29,7 +34,7 @@ if (basename($_SERVER['SCRIPT_FILENAME'] ?? '') === 'api.php') {
             if (!is_file($path)) {
                 throw new RuntimeException('Файл журнала автомобиля не найден');
             }
-            $out = dispatch(openLogbook($path), $action);
+            $out = dispatch(openLogbook($path), $action, $cars);
         }
         echo json_encode(['ok' => true, 'data' => $out], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
@@ -41,16 +46,22 @@ if (basename($_SERVER['SCRIPT_FILENAME'] ?? '') === 'api.php') {
 
 // ─── Router ────────────────────────────────────────────────────────────────
 
-function dispatch(PDO $db, string $action): mixed {
+function dispatch(PDO $db, string $action, array $cars): mixed {
     return match ($action) {
         'get_settings'        => actionGetSettings($db),
         'save_settings'       => actionSaveSettings($db),
         'get_logbook'         => actionGetLogbook($db),
         'add_checkpoint'      => actionAddCheckpoint($db),
-        'create_waybill'      => actionCreateWaybill($db),
+        'create_waybill'      => actionCreateWaybill($db, openSharedGraph($cars)),
         'delete_waybill'      => actionDeleteWaybill($db),
         'get_waybill'         => actionGetWaybill($db),
-        'regen_route'         => actionRegenRoute($db),
+        'regen_route'         => actionRegenRoute($db, openSharedGraph($cars)),
+        default               => throw new RuntimeException("Unknown action: $action"),
+    };
+}
+
+function dispatchGraph(PDO $db, string $action): mixed {
+    return match ($action) {
         'get_locations'       => actionGetLocations($db),
         'add_location'        => actionAddLocation($db),
         'update_location'     => actionUpdateLocation($db),
@@ -114,7 +125,7 @@ function pp(string $key): ?float {
     return (float)$_POST[$key];
 }
 
-function actionCreateWaybill(PDO $db): array {
+function actionCreateWaybill(PDO $db, PDO $graph): array {
     $number       = trim($_POST['number']        ?? '');
     $fuelRefueled = (float)($_POST['fuel_refueled'] ?? 0);
     $refuelTime   = trim($_POST['refuel_time']   ?? '');
@@ -140,7 +151,7 @@ function actionCreateWaybill(PDO $db): array {
         }
         $options = ['segment_mode' => $segmentMode, 'fuel_mode' => $fuelMode];
     }
-    $route = generateRoute($db, $fuelRefueled, $refuelTime, actionGetSettings($db), options: $options);
+    $route = generateRoute($graph, $fuelRefueled, $refuelTime, actionGetSettings($db), options: $options);
     if (!$route) throw new \RuntimeException('Не удалось построить маршрут. Добавьте точки и рёбра в «Граф локаций».');
 
     $dist      = $route['totalDist'];
@@ -207,19 +218,13 @@ function actionGetWaybill(PDO $db): array {
     if (!$w) throw new \RuntimeException('Путевой лист не найден');
 
     $stmt = $db->prepare("
-        SELECT rs.*, fl.name AS from_name, fl.type AS from_type,
-                     tl.name AS to_name,   tl.type AS to_type
-        FROM route_segments rs
-        JOIN locations fl ON rs.from_id = fl.id
-        JOIN locations tl ON rs.to_id   = tl.id
-        WHERE rs.waybill_id = ?
-        ORDER BY rs.seg_order
+        SELECT * FROM route_segments WHERE waybill_id = ? ORDER BY seg_order
     ");
     $stmt->execute([$id]);
     return ['waybill' => $w, 'segments' => $stmt->fetchAll()];
 }
 
-function actionRegenRoute(PDO $db): array {
+function actionRegenRoute(PDO $db, PDO $graph): array {
     $id = (int)($_POST['id'] ?? 0);
     if (!$id) throw new \RuntimeException('Неверный ID');
     $stmt = $db->prepare("SELECT * FROM waybills WHERE id=?");
@@ -232,7 +237,7 @@ function actionRegenRoute(PDO $db): array {
     $stmt->execute([$id]);
     $options = $stmt->fetch() ?: null;
     $route = generateRoute(
-        $db,
+        $graph,
         (float)$w['fuel_refueled'],
         $w['refuel_time'],
         $settings,
@@ -283,24 +288,36 @@ function actionRegenRoute(PDO $db): array {
 
 function saveSegments(PDO $db, int $wid, array $segs): void {
     $st = $db->prepare("
-        INSERT INTO route_segments (waybill_id,seg_order,from_id,to_id,start_time,end_time,distance)
-        VALUES (?,?,?,?,?,?,?)
+        INSERT INTO route_segments (waybill_id,seg_order,from_id,to_id,from_name,from_type,to_name,to_type,
+                                    start_time,end_time,distance)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?)
     ");
     foreach ($segs as $i => $s) {
-        $st->execute([$wid, $i, $s['from_id'], $s['to_id'], $s['start_time'], $s['end_time'], $s['distance']]);
+        $st->execute([
+            $wid, $i, $s['from_id'], $s['to_id'],
+            $s['from_name'], $s['from_type'], $s['to_name'], $s['to_type'],
+            $s['start_time'], $s['end_time'], $s['distance'],
+        ]);
     }
 }
 
 // ─── Locations ─────────────────────────────────────────────────────────────
 
 function actionGetLocations(PDO $db): array {
-    $locs  = $db->query("SELECT * FROM locations ORDER BY id")->fetchAll();
-    $edges = $db->query("
-        SELECT e.*, la.name AS loc_a_name, lb.name AS loc_b_name
-        FROM edges e
-        JOIN locations la ON e.loc_a = la.id
-        JOIN locations lb ON e.loc_b = lb.id
-    ")->fetchAll();
+    $db->beginTransaction();
+    try {
+        $locs  = $db->query("SELECT * FROM locations ORDER BY id")->fetchAll();
+        $edges = $db->query("
+            SELECT e.*, la.name AS loc_a_name, lb.name AS loc_b_name
+            FROM edges e
+            JOIN locations la ON e.loc_a = la.id
+            JOIN locations lb ON e.loc_b = lb.id
+        ")->fetchAll();
+        $db->commit();
+    } catch (Throwable $error) {
+        $db->rollBack();
+        throw $error;
+    }
     return ['locations' => $locs, 'edges' => $edges];
 }
 
@@ -315,12 +332,19 @@ function actionAddLocation(PDO $db): array {
     if (!$name) throw new \RuntimeException('Название обязательно');
     if ($fromId && $dist <= 0) throw new \RuntimeException('Расстояние > 0');
 
-    $db->prepare("INSERT INTO locations (name,type,x,y) VALUES (?,?,?,?)")->execute([$name,$type,$x,$y]);
-    $newId = (int)$db->lastInsertId();
+    $db->beginTransaction();
+    try {
+        $db->prepare("INSERT INTO locations (name,type,x,y) VALUES (?,?,?,?)")->execute([$name,$type,$x,$y]);
+        $newId = (int)$db->lastInsertId();
 
-    if ($fromId) {
-        $a = min($fromId, $newId); $b = max($fromId, $newId);
-        $db->prepare("INSERT INTO edges (loc_a,loc_b,distance) VALUES (?,?,?)")->execute([$a,$b,$dist]);
+        if ($fromId) {
+            $a = min($fromId, $newId); $b = max($fromId, $newId);
+            $db->prepare("INSERT INTO edges (loc_a,loc_b,distance) VALUES (?,?,?)")->execute([$a,$b,$dist]);
+        }
+        $db->commit();
+    } catch (Throwable $error) {
+        $db->rollBack();
+        throw $error;
     }
     return actionGetLocations($db);
 }
@@ -454,7 +478,7 @@ function generateRoute(
     }
 
     return [
-        'segments' => buildSegments($route['path'], $adj, $refuelTime, $targetDistance),
+        'segments' => buildSegments($route['path'], $adj, $refuelTime, $targetDistance, $locMap),
         'totalDist' => $targetDistance,
         'fuelSpent' => $route['fuelSpent'],
     ];
@@ -694,7 +718,7 @@ function dijkstraPath(array $adj, int $src, int $dst): ?array {
     return $path;
 }
 
-function buildSegments(array $path, array $adj, string $refuelTime, float $totalDist): array {
+function buildSegments(array $path, array $adj, string $refuelTime, float $totalDist, array $locations): array {
     $speed       = 60.0;
     $totalMinutes = (int)round($totalDist / $speed * 60);
 
@@ -718,6 +742,10 @@ function buildSegments(array $path, array $adj, string $refuelTime, float $total
         $segs[] = [
             'from_id'    => $fid,
             'to_id'      => $tid,
+            'from_name'  => $locations[$fid]['name'],
+            'from_type'  => $locations[$fid]['type'],
+            'to_name'    => $locations[$tid]['name'],
+            'to_type'    => $locations[$tid]['type'],
             'start_time' => minsToTime($startM),
             'end_time'   => minsToTime($endM),
             'distance'   => $d,

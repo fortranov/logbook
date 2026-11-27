@@ -90,12 +90,14 @@ function saveVehicle(PDO $catalog, bool $assignLegacyPlate): array {
     return ['id' => $id];
 }
 
-function deleteVehicle(PDO $catalog): array {
+function deleteVehicle(PDO $catalog, array $cars): array {
     $id = $_POST['id'] ?? '';
-    $cars = listVehicles($catalog);
     if (!is_string($id) || !isset($cars[$id])) {
         throw new RuntimeException('Автомобиль не найден');
     }
+
+    // Copy the first vehicle's graph before removing a possible migration source.
+    openSharedGraph($cars);
 
     $stmt = $catalog->prepare('UPDATE vehicles SET deleted = 1, plate = NULL WHERE id = ?');
     $stmt->execute([$id]);

@@ -70,10 +70,10 @@ if (!in_array($page, $allowed, true)) $page = 'logbook';
   </nav>
 </header>
 
-<main id="app" data-page="<?= $selectedId === null ? '' : htmlspecialchars($page) ?>" data-vehicle="<?= $selectedId ?? '' ?>"
+<main id="app" data-page="<?= $selectedId === null && $page !== 'graph' ? '' : htmlspecialchars($page) ?>" data-vehicle="<?= $selectedId ?? '' ?>"
       <?= $waybillId ? 'data-waybill-id="'.(int)$waybillId.'"' : '' ?>>
 
-<?php if ($selectedId === null): ?>
+<?php if ($selectedId === null && $page !== 'graph'): ?>
 <div class="page-toolbar">
   <h1>Бортовой журнал</h1>
   <button type="button" data-vehicle-form="add_vehicle">Добавить автомобиль</button>
@@ -256,7 +256,7 @@ if (!in_array($page, $allowed, true)) $page = 'logbook';
 <div id="spinner" class="spinner" hidden></div>
 
 <script src="assets/app.js"></script>
-<?php if ($selectedId !== null && $page === 'graph'): ?>
+<?php if ($page === 'graph'): ?>
 <script src="assets/graph.js"></script>
 <?php endif; ?>
 </body>
