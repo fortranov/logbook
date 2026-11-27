@@ -456,8 +456,9 @@ function generateRoute(
     $rate   = (float)($settings['season'] === 'summer' ? $settings['fuel_summer'] : $settings['fuel_winter']);
     $coeff  = (float)$settings['countryside_coeff'];
 
-    if (!is_finite($fuelAvailable) || $fuelAvailable <= 0) {
-        throw new RuntimeException('Недостаточно бензина для поездки с учётом заправки');
+    $fuelBudget = $fuelAvailable - 1.0;
+    if (!is_finite($fuelBudget) || $fuelBudget <= 0) {
+        throw new RuntimeException('Недостаточно бензина для поездки с остатком не менее 1 л');
     }
 
     $dStart = dijkstraDist($adj, $startId);
@@ -466,10 +467,10 @@ function generateRoute(
         $baselineSeed = $options === null ? $seed : 0;
         if ($baselineSeed !== null) mt_srand($baselineSeed);
         $baseline = findBaselineRoute(
-            $adj, $startId, $dStart, $fuelRefueled, $rate, $coeff, $fuelAvailable, $options !== null
+            $adj, $startId, $dStart, $fuelRefueled, $rate, $coeff, $fuelBudget, $options !== null
         );
         if ($baseline === null) {
-            throw new RuntimeException('Недостаточно бензина для маршрута по графу локаций');
+            throw new RuntimeException('Нет подходящего маршрута с остатком бензина не менее 1 л');
         }
         $targetDistance = $baseline['totalDist'];
     }
@@ -486,17 +487,17 @@ function generateRoute(
         $route = optimizeRoute($adj, $startId, $dStart, $targetDistance, $options);
         if ($route === null) return null;
         $fuelSpent = routeFuel($targetDistance, $route['countryDistance'], $rate, $coeff);
-        if (!fuelFits($fuelSpent, $fuelAvailable)) {
+        if (!fuelFits($fuelSpent, $fuelBudget)) {
             $canFinish = static function (float $covered, float $country) use (
-                $targetDistance, $rate, $coeff, $fuelAvailable
+                $targetDistance, $rate, $coeff, $fuelBudget
             ): bool {
                 // Assume all remaining distance uses the cheaper fuel rate.
                 if ($coeff < 1) $country += $targetDistance - $covered;
-                return fuelFits(routeFuel($targetDistance, $country, $rate, $coeff), $fuelAvailable);
+                return fuelFits(routeFuel($targetDistance, $country, $rate, $coeff), $fuelBudget);
             };
             $route = optimizeRoute($adj, $startId, $dStart, $targetDistance, $options, $canFinish);
             if ($route === null) {
-                throw new RuntimeException('Недостаточно бензина для маршрута с этим километражем');
+                throw new RuntimeException('Нет маршрута с этим километражем и остатком бензина не менее 1 л');
             }
             $fuelSpent = routeFuel($targetDistance, $route['countryDistance'], $rate, $coeff);
         }
@@ -526,7 +527,7 @@ function findBaselineRoute(
     float $fuelRefueled,
     float $rate,
     float $coeff,
-    float $fuelAvailable,
+    float $fuelBudget,
     bool $fuelBySegment
 ): ?array {
     $best     = null;
@@ -535,7 +536,7 @@ function findBaselineRoute(
     for ($att = 0; $att < 400; $att++) {
         // Alternate target: city-rate vs countryside-rate.
         $targetRate = ($att % 3 === 0) ? $rate : $rate * $coeff;
-        $target = min($fuelRefueled, $fuelAvailable) * 100.0 / $targetRate;
+        $target = min($fuelRefueled, $fuelBudget) * 100.0 / $targetRate;
 
         $res = randomWalk($adj, $startId, $target, $dStart);
         if (!$res) continue;
@@ -543,7 +544,7 @@ function findBaselineRoute(
 
         $baselineFuel = routeFuel($totalDist, $countryDistance > 0 ? $totalDist : 0, $rate, $coeff);
         $fuelSpent = $fuelBySegment ? routeFuel($totalDist, $countryDistance, $rate, $coeff) : $baselineFuel;
-        if (!fuelFits($fuelSpent, $fuelAvailable)) continue;
+        if (!fuelFits($fuelSpent, $fuelBudget)) continue;
 
         $diff = abs(round($baselineFuel, 2) - $fuelRefueled);
         if ($diff < $bestDiff) {
@@ -559,7 +560,7 @@ function findBaselineRoute(
     foreach ($adj[$startId] as $edge) {
         $distance = 2 * $edge['dist'];
         $spent = routeFuel($distance, $edge['country'] ? $distance : 0, $rate, $coeff);
-        if (fuelFits($spent, $fuelAvailable) && ($best === null || $distance < $best['totalDist'])) {
+        if (fuelFits($spent, $fuelBudget) && ($best === null || $distance < $best['totalDist'])) {
             $best = ['path' => [$startId, $edge['to'], $startId], 'totalDist' => round($distance, 1), 'fuelSpent' => $spent];
         }
     }
