@@ -136,11 +136,6 @@ function actionCreateWaybill(PDO $db, PDO $graph): array {
     if ($fuelRefueled <= 0) throw new \RuntimeException('Количество топлива > 0');
     if (!$refuelTime)       throw new \RuntimeException('Время заправки обязательно');
 
-    $prev          = lastLogEntry($db);
-    $odomBefore    = (float)($prev['odometer']       ?? 0);
-    $to2Before     = (float)($prev['since_to2']      ?? 0);
-    $fuelBefore    = (float)($prev['fuel_remaining'] ?? 0);
-
     $options = null;
     if (isset($_POST['segment_mode']) || isset($_POST['fuel_mode'])) {
         $segmentMode = $_POST['segment_mode'] ?? 'average';
@@ -151,18 +146,26 @@ function actionCreateWaybill(PDO $db, PDO $graph): array {
         }
         $options = ['segment_mode' => $segmentMode, 'fuel_mode' => $fuelMode];
     }
-    $route = generateRoute($graph, $fuelRefueled, $refuelTime, actionGetSettings($db), options: $options);
-    if (!$route) throw new \RuntimeException('Не удалось построить маршрут. Добавьте точки и рёбра в «Граф локаций».');
-
-    $dist      = $route['totalDist'];
-    $fuelSpent = round($route['fuelSpent'], 1);
-    $odomAfter = $odomBefore + $dist;
-    $to2After  = $to2Before  + $dist;
-    $fuelAfter = round($fuelBefore + $fuelRefueled - $fuelSpent, 1);
-    $dailyFuel = round($fuelRefueled - $fuelSpent, 1);
-
-    $db->beginTransaction();
+    // Lock before reading the starting balance so simultaneous forms use successive balances.
+    $db->exec('BEGIN IMMEDIATE');
     try {
+        $prev          = lastLogEntry($db);
+        $odomBefore    = (float)($prev['odometer']       ?? 0);
+        $to2Before     = (float)($prev['since_to2']      ?? 0);
+        $fuelBefore    = (float)($prev['fuel_remaining'] ?? 0);
+
+        $route = generateRoute(
+            $graph, $fuelRefueled, $refuelTime, actionGetSettings($db), $fuelBefore + $fuelRefueled, options: $options
+        );
+        if (!$route) throw new \RuntimeException('Не удалось построить маршрут. Добавьте точки и рёбра в «Граф локаций».');
+
+        $dist      = $route['totalDist'];
+        $fuelSpent = round($route['fuelSpent'], 1);
+        $odomAfter = $odomBefore + $dist;
+        $to2After  = $to2Before  + $dist;
+        $fuelAfter = round($fuelBefore + $fuelRefueled - $fuelSpent, 1);
+        $dailyFuel = round($fuelRefueled - $fuelSpent, 1);
+
         $db->prepare("
             INSERT INTO waybills (number,date,refuel_time,odometer_before,odometer_after,daily_mileage,
                                   fuel_refueled,fuel_spent,fuel_before,fuel_after)
@@ -182,9 +185,9 @@ function actionCreateWaybill(PDO $db, PDO $graph): array {
                                  waybill_id,entry_date,entry_time)
             VALUES ('waybill',?,?,?,?,?,?,?,time('now','localtime'))
         ")->execute([$odomAfter, $dist, $to2After, $fuelAfter, $dailyFuel, $wid, $date]);
-        $db->commit();
+        $db->exec('COMMIT');
     } catch (Throwable $error) {
-        $db->rollBack();
+        $db->exec('ROLLBACK');
         throw $error;
     }
 
@@ -241,6 +244,7 @@ function actionRegenRoute(PDO $db, PDO $graph): array {
         (float)$w['fuel_refueled'],
         $w['refuel_time'],
         $settings,
+        (float)$w['fuel_before'] + (float)$w['fuel_refueled'],
         mt_rand(1, 999999),
         $options,
         $options === null ? null : (float)$w['daily_mileage']
@@ -414,6 +418,7 @@ function generateRoute(
     float $fuelRefueled,
     string $refuelTime,
     array $settings,
+    float $fuelAvailable,
     ?int $seed = null,
     ?array $options = null,
     ?float $targetDistance = null
@@ -451,13 +456,21 @@ function generateRoute(
     $rate   = (float)($settings['season'] === 'summer' ? $settings['fuel_summer'] : $settings['fuel_winter']);
     $coeff  = (float)$settings['countryside_coeff'];
 
+    if (!is_finite($fuelAvailable) || $fuelAvailable <= 0) {
+        throw new RuntimeException('Недостаточно бензина для поездки с учётом заправки');
+    }
+
     $dStart = dijkstraDist($adj, $startId);
     if ($options === null || $targetDistance === null) {
         // Use the same baseline walks for all four settings.
         $baselineSeed = $options === null ? $seed : 0;
         if ($baselineSeed !== null) mt_srand($baselineSeed);
-        $baseline = findBaselineRoute($adj, $startId, $dStart, $locMap, $fuelRefueled, $rate, $coeff);
-        if ($baseline === null) return null;
+        $baseline = findBaselineRoute(
+            $adj, $startId, $dStart, $fuelRefueled, $rate, $coeff, $fuelAvailable, $options !== null
+        );
+        if ($baseline === null) {
+            throw new RuntimeException('Недостаточно бензина для маршрута по графу локаций');
+        }
         $targetDistance = $baseline['totalDist'];
     }
 
@@ -472,48 +485,67 @@ function generateRoute(
         }
         $route = optimizeRoute($adj, $startId, $dStart, $targetDistance, $options);
         if ($route === null) return null;
-        $countryKm = $route['countryDistance'];
-        $cityKm = $targetDistance - $countryKm;
-        $route['fuelSpent'] = round(($cityKm + $countryKm * $coeff) * $rate / 100.0, 2);
+        $fuelSpent = routeFuel($targetDistance, $route['countryDistance'], $rate, $coeff);
+        if (!fuelFits($fuelSpent, $fuelAvailable)) {
+            $canFinish = static function (float $covered, float $country) use (
+                $targetDistance, $rate, $coeff, $fuelAvailable
+            ): bool {
+                // Assume all remaining distance uses the cheaper fuel rate.
+                if ($coeff < 1) $country += $targetDistance - $covered;
+                return fuelFits(routeFuel($targetDistance, $country, $rate, $coeff), $fuelAvailable);
+            };
+            $route = optimizeRoute($adj, $startId, $dStart, $targetDistance, $options, $canFinish);
+            if ($route === null) {
+                throw new RuntimeException('Недостаточно бензина для маршрута с этим километражем');
+            }
+            $fuelSpent = routeFuel($targetDistance, $route['countryDistance'], $rate, $coeff);
+        }
+        $route['fuelSpent'] = $fuelSpent;
     }
 
     return [
         'segments' => buildSegments($route['path'], $adj, $refuelTime, $targetDistance, $locMap),
         'totalDist' => $targetDistance,
-        'fuelSpent' => $route['fuelSpent'],
+        'fuelSpent' => round($route['fuelSpent'], 2),
     ];
+}
+
+function routeFuel(float $distance, float $country, float $rate, float $coeff): float {
+    return ($distance - $country + $country * $coeff) * $rate / 100.0;
+}
+
+function fuelFits(float $spent, float $available): bool {
+    // Check both the calculation and the value stored in the journal.
+    return max($spent, round(round($spent, 2), 1)) <= $available + 1e-9;
 }
 
 function findBaselineRoute(
     array $adj,
     int $startId,
     array $dStart,
-    array $locMap,
     float $fuelRefueled,
     float $rate,
-    float $coeff
+    float $coeff,
+    float $fuelAvailable,
+    bool $fuelBySegment
 ): ?array {
     $best     = null;
     $bestDiff = PHP_FLOAT_MAX;
 
     for ($att = 0; $att < 400; $att++) {
-        // Alternate target: city-rate vs countryside-rate
+        // Alternate target: city-rate vs countryside-rate.
         $targetRate = ($att % 3 === 0) ? $rate : $rate * $coeff;
-        $target     = $fuelRefueled * 100.0 / $targetRate;
+        $target = min($fuelRefueled, $fuelAvailable) * 100.0 / $targetRate;
 
         $res = randomWalk($adj, $startId, $target, $dStart);
         if (!$res) continue;
-        [$path, $totalDist] = $res;
+        [$path, $totalDist, $countryDistance] = $res;
 
-        // Determine effective rate
-        $hasCountry = false;
-        foreach ($path as $nid) {
-            if (($locMap[$nid]['type'] ?? 'city') === 'countryside') { $hasCountry = true; break; }
-        }
-        $effRate   = $hasCountry ? $rate * $coeff : $rate;
-        $fuelSpent = round($totalDist * $effRate / 100.0, 2);
-        $diff      = abs($fuelSpent - $fuelRefueled);
+        $baselineFuel = routeFuel($totalDist, $countryDistance > 0 ? $totalDist : 0, $rate, $coeff);
+        $fuelSpent = $fuelBySegment ? routeFuel($totalDist, $countryDistance, $rate, $coeff) : $baselineFuel;
+        if (!fuelFits($fuelSpent, $fuelAvailable)) continue;
 
+        $diff = abs(round($baselineFuel, 2) - $fuelRefueled);
         if ($diff < $bestDiff) {
             $bestDiff = $diff;
             $best = ['path' => $path, 'totalDist' => round($totalDist, 1), 'fuelSpent' => $fuelSpent];
@@ -521,26 +553,43 @@ function findBaselineRoute(
         if ($diff < 0.3) break;
     }
 
+    if ($best !== null) return $best;
+
+    // The random walks may overshoot. Try the shortest affordable out-and-back.
+    foreach ($adj[$startId] as $edge) {
+        $distance = 2 * $edge['dist'];
+        $spent = routeFuel($distance, $edge['country'] ? $distance : 0, $rate, $coeff);
+        if (fuelFits($spent, $fuelAvailable) && ($best === null || $distance < $best['totalDist'])) {
+            $best = ['path' => [$startId, $edge['to'], $startId], 'totalDist' => round($distance, 1), 'fuelSpent' => $spent];
+        }
+    }
     return $best;
 }
 
 // Distances are integer tenths of a kilometre, matching the graph editor.
-function optimizeRoute(array $adj, int $startId, array $dStart, float $distance, array $options): ?array {
+function optimizeRoute(
+    array $adj,
+    int $startId,
+    array $dStart,
+    float $distance,
+    array $options,
+    ?callable $canFinish = null
+): ?array {
     $target = (int)round($distance * 10);
     $minimum = $options['segment_mode'] === 'minimum';
     $maximizeCountry = $options['fuel_mode'] === 'consumption';
     $countrySign = $maximizeCountry ? -1 : 1;
 
-    // At each (distance, location), keep the best prefix. Future choices
-    // depend only on the current location and the remaining distance.
-    $states = [0 => [$startId => [0, 0, 0, $startId]]];
+    // With a fuel limit, keep different countryside totals until returning to the start.
+    // A prefix with more countryside can rank higher but leave too little fuel to finish.
+    $states = [0 => [$startId => [0, 0, 0, $startId, $startId]]];
     $levels = new SplPriorityQueue();
     $levels->insert(0, 0);
     $stateCount = 1;
     while (!$levels->isEmpty()) {
         $used = $levels->extract();
         if ($used === $target) break;
-        foreach ($states[$used] as $node => [$steps, $country]) {
+        foreach ($states[$used] as $previousKey => [$steps, $country, , , $node]) {
             foreach ($adj[$node] as $edge) {
                 $next = $edge['to'];
                 $length = (int)round($edge['dist'] * 10);
@@ -549,7 +598,9 @@ function optimizeRoute(array $adj, int $startId, array $dStart, float $distance,
 
                 $newSteps = $steps + 1;
                 $newCountry = $country + ($edge['country'] ? $length : 0);
-                $existing = $states[$newDistance][$next] ?? null;
+                if ($canFinish !== null && !$canFinish($newDistance / 10, $newCountry / 10)) continue;
+                $key = $canFinish !== null && $newDistance < $target ? "$next:$newCountry" : $next;
+                $existing = $states[$newDistance][$key] ?? null;
                 if ($existing !== null) {
                     $bySteps = $minimum ? $newSteps <=> $existing[0] : 0;
                     $byCountry = ($newCountry <=> $existing[1]) * $countrySign;
@@ -562,7 +613,7 @@ function optimizeRoute(array $adj, int $startId, array $dStart, float $distance,
                 if (!isset($states[$newDistance])) {
                     $levels->insert($newDistance, -$newDistance);
                 }
-                $states[$newDistance][$next] = [$newSteps, $newCountry, $used, $node];
+                $states[$newDistance][$key] = [$newSteps, $newCountry, $used, $previousKey, $next];
             }
         }
     }
@@ -570,10 +621,10 @@ function optimizeRoute(array $adj, int $startId, array $dStart, float $distance,
     if ($target <= 0 || !isset($states[$target][$startId])) return null;
     $country = $states[$target][$startId][1];
     $path = [$startId];
-    $node = $startId;
+    $key = $startId;
     for ($used = $target; $used > 0;) {
-        [, , $used, $node] = $states[$used][$node];
-        $path[] = $node;
+        [, , $used, $key] = $states[$used][$key];
+        $path[] = $states[$used][$key][4];
     }
     return ['path' => array_reverse($path), 'countryDistance' => $country / 10];
 }
@@ -654,12 +705,16 @@ function randomWalk(
     }
 
     if (count($path) < 2) return null;
-    return [$path, $dist];
+    $country = 0.0;
+    for ($i = 1; $i < count($path); $i++) {
+        $country += edgeDist($adj, $path[$i - 1], $path[$i], countrysideOnly: true);
+    }
+    return [$path, $dist, $country];
 }
 
-function edgeDist(array $adj, int $from, int $to): float {
+function edgeDist(array $adj, int $from, int $to, bool $countrysideOnly = false): float {
     foreach ($adj[$from] ?? [] as $nb) {
-        if ($nb['to'] === $to) return $nb['dist'];
+        if ($nb['to'] === $to) return !$countrysideOnly || $nb['country'] ? $nb['dist'] : 0.0;
     }
     return 0.0;
 }
