@@ -125,6 +125,27 @@ tbody td a:hover { text-decoration: underline; }
   border-color: transparent;
 }
 
+.route-preferences {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(155px, 1fr));
+  gap: 10px;
+}
+.route-switch { border: 0; min-width: 0; }
+.route-switch legend { margin-bottom: 4px; font-size: 13px; color: #444; font-weight: 500; }
+.route-switch > div {
+  display: flex;
+  padding: 2px;
+  border: 1px solid #d8e0e9;
+  border-radius: 6px;
+  background: #f4f6f8;
+}
+.route-switch label { position: relative; flex: 1; margin: 0; cursor: pointer; }
+.route-switch input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.route-switch span { text-align: center; border-radius: 4px; padding: 6px 4px; }
+.route-switch input:checked + span { color: #fff; background: #1e3a5f; }
+.route-switch input:focus-visible + span { outline: 2px solid #1980b5; outline-offset: 1px; }
+#modal-wb { overflow-y: auto; align-items: safe center; }
+
 .modal-footer { display: flex; gap: 10px; margin-top: 18px; justify-content: flex-end; }
 
 .error-msg { color: #c0392b; font-size: 13px; margin-top: 6px; min-height: 18px; }

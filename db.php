@@ -60,6 +60,12 @@ function initSchema(PDO $db): void {
             fuel_after      REAL NOT NULL DEFAULT 0
         );
 
+        CREATE TABLE IF NOT EXISTS waybill_route_options (
+            waybill_id   INTEGER PRIMARY KEY REFERENCES waybills(id) ON DELETE CASCADE,
+            segment_mode TEXT NOT NULL,
+            fuel_mode    TEXT NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS route_segments (
             id         INTEGER PRIMARY KEY AUTOINCREMENT,
             waybill_id INTEGER NOT NULL REFERENCES waybills(id) ON DELETE CASCADE,

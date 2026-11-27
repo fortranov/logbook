@@ -132,6 +132,22 @@ if (!in_array($page, $allowed, true)) $page = 'logbook';
     <label>Номер путевого листа<input type="text"   id="wb-number"></label>
     <label>Заправлено бензина (л)<input type="number" id="wb-fuel" min="0.1" step="0.1"></label>
     <label>Время заправки<input type="time" id="wb-time" value="12:00"></label>
+    <div class="route-preferences">
+      <fieldset class="route-switch">
+        <legend>Количество отрезков</legend>
+        <div>
+          <label><input type="radio" name="wb-segments" value="minimum"><span>Минимум</span></label>
+          <label><input type="radio" name="wb-segments" value="average" checked><span>Среднее</span></label>
+        </div>
+      </fieldset>
+      <fieldset class="route-switch">
+        <legend>Топливо</legend>
+        <div>
+          <label><input type="radio" name="wb-fuel-mode" value="economy" checked><span>Экономия</span></label>
+          <label><input type="radio" name="wb-fuel-mode" value="consumption"><span>Расход</span></label>
+        </div>
+      </fieldset>
+    </div>
     <p id="wb-error" class="error-msg"></p>
     <div class="modal-footer">
       <button id="wb-save">Создать</button>

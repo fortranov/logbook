@@ -139,6 +139,8 @@ async function saveWaybill() {
       number:        $('wb-number').value,
       fuel_refueled: $('wb-fuel').value,
       refuel_time:   $('wb-time').value,
+      segment_mode:  document.querySelector('input[name="wb-segments"]:checked').value,
+      fuel_mode:     document.querySelector('input[name="wb-fuel-mode"]:checked').value,
     }, 'POST');
     closeModal('modal-wb');
     ['wb-number','wb-fuel'].forEach(id => $(id).value = '');

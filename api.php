@@ -130,8 +130,17 @@ function actionCreateWaybill(PDO $db): array {
     $to2Before     = (float)($prev['since_to2']      ?? 0);
     $fuelBefore    = (float)($prev['fuel_remaining'] ?? 0);
 
-    $settings = actionGetSettings($db);
-    $route    = generateRoute($db, $fuelRefueled, $refuelTime, $settings);
+    $options = null;
+    if (isset($_POST['segment_mode']) || isset($_POST['fuel_mode'])) {
+        $segmentMode = $_POST['segment_mode'] ?? 'average';
+        $fuelMode = $_POST['fuel_mode'] ?? 'economy';
+        if (!in_array($segmentMode, ['minimum', 'average'], true)
+            || !in_array($fuelMode, ['economy', 'consumption'], true)) {
+            throw new RuntimeException('Неверные настройки маршрута');
+        }
+        $options = ['segment_mode' => $segmentMode, 'fuel_mode' => $fuelMode];
+    }
+    $route = generateRoute($db, $fuelRefueled, $refuelTime, actionGetSettings($db), options: $options);
     if (!$route) throw new \RuntimeException('Не удалось построить маршрут. Добавьте точки и рёбра в «Граф локаций».');
 
     $dist      = $route['totalDist'];
@@ -141,21 +150,32 @@ function actionCreateWaybill(PDO $db): array {
     $fuelAfter = round($fuelBefore + $fuelRefueled - $fuelSpent, 1);
     $dailyFuel = round($fuelRefueled - $fuelSpent, 1);
 
-    $db->prepare("
-        INSERT INTO waybills (number,date,refuel_time,odometer_before,odometer_after,daily_mileage,
-                              fuel_refueled,fuel_spent,fuel_before,fuel_after)
-        VALUES (?,?,?,?,?,?,?,?,?,?)
-    ")->execute([$number, $date, $refuelTime, $odomBefore, $odomAfter, $dist,
-                 $fuelRefueled, $fuelSpent, $fuelBefore, $fuelAfter]);
-    $wid = (int)$db->lastInsertId();
+    $db->beginTransaction();
+    try {
+        $db->prepare("
+            INSERT INTO waybills (number,date,refuel_time,odometer_before,odometer_after,daily_mileage,
+                                  fuel_refueled,fuel_spent,fuel_before,fuel_after)
+            VALUES (?,?,?,?,?,?,?,?,?,?)
+        ")->execute([$number, $date, $refuelTime, $odomBefore, $odomAfter, $dist,
+                     $fuelRefueled, $fuelSpent, $fuelBefore, $fuelAfter]);
+        $wid = (int)$db->lastInsertId();
 
-    saveSegments($db, $wid, $route['segments']);
+        if ($options !== null) {
+            $db->prepare('INSERT INTO waybill_route_options (waybill_id, segment_mode, fuel_mode) VALUES (?, ?, ?)')
+               ->execute([$wid, $options['segment_mode'], $options['fuel_mode']]);
+        }
+        saveSegments($db, $wid, $route['segments']);
 
-    $db->prepare("
-        INSERT INTO logbook (entry_type,odometer,daily_mileage,since_to2,fuel_remaining,daily_fuel,
-                             waybill_id,entry_date,entry_time)
-        VALUES ('waybill',?,?,?,?,?,?,?,time('now','localtime'))
-    ")->execute([$odomAfter, $dist, $to2After, $fuelAfter, $dailyFuel, $wid, $date]);
+        $db->prepare("
+            INSERT INTO logbook (entry_type,odometer,daily_mileage,since_to2,fuel_remaining,daily_fuel,
+                                 waybill_id,entry_date,entry_time)
+            VALUES ('waybill',?,?,?,?,?,?,?,time('now','localtime'))
+        ")->execute([$odomAfter, $dist, $to2After, $fuelAfter, $dailyFuel, $wid, $date]);
+        $db->commit();
+    } catch (Throwable $error) {
+        $db->rollBack();
+        throw $error;
+    }
 
     return ['waybill_id' => $wid];
 }
@@ -208,7 +228,18 @@ function actionRegenRoute(PDO $db): array {
     if (!$w) throw new \RuntimeException('Путевой лист не найден');
 
     $settings = actionGetSettings($db);
-    $route = generateRoute($db, (float)$w['fuel_refueled'], $w['refuel_time'], $settings, mt_rand(1, 999999));
+    $stmt = $db->prepare('SELECT segment_mode, fuel_mode FROM waybill_route_options WHERE waybill_id = ?');
+    $stmt->execute([$id]);
+    $options = $stmt->fetch() ?: null;
+    $route = generateRoute(
+        $db,
+        (float)$w['fuel_refueled'],
+        $w['refuel_time'],
+        $settings,
+        mt_rand(1, 999999),
+        $options,
+        $options === null ? null : (float)$w['daily_mileage']
+    );
     if (!$route) throw new \RuntimeException('Не удалось построить новый маршрут');
 
     $dist      = $route['totalDist'];
@@ -216,26 +247,33 @@ function actionRegenRoute(PDO $db): array {
     $odomAfter = (float)$w['odometer_before'] + $dist;
     $fuelAfter = round((float)$w['fuel_before'] + (float)$w['fuel_refueled'] - $fuelSpent, 1);
 
-    $db->prepare("DELETE FROM route_segments WHERE waybill_id=?")->execute([$id]);
-    $db->prepare("
-        UPDATE waybills SET odometer_after=?,daily_mileage=?,fuel_spent=?,fuel_after=? WHERE id=?
-    ")->execute([$odomAfter, $dist, $fuelSpent, $fuelAfter, $id]);
-    saveSegments($db, $id, $route['segments']);
-
-    // Update logbook row
-    $stmt = $db->prepare("SELECT id FROM logbook WHERE waybill_id=?");
-    $stmt->execute([$id]);
-    $logRow = $stmt->fetch();
-    if ($logRow) {
-        $lid = (int)$logRow['id'];
-        $prev = $db->prepare("SELECT since_to2 FROM logbook WHERE id < ? ORDER BY id DESC LIMIT 1");
-        $prev->execute([$lid]);
-        $pRow     = $prev->fetch();
-        $to2After = ((float)($pRow['since_to2'] ?? 0)) + $dist;
-        $dailyFuel = round((float)$w['fuel_refueled'] - $fuelSpent, 1);
+    $db->beginTransaction();
+    try {
+        $db->prepare("DELETE FROM route_segments WHERE waybill_id=?")->execute([$id]);
         $db->prepare("
-            UPDATE logbook SET odometer=?,daily_mileage=?,since_to2=?,fuel_remaining=?,daily_fuel=? WHERE id=?
-        ")->execute([$odomAfter, $dist, $to2After, $fuelAfter, $dailyFuel, $lid]);
+            UPDATE waybills SET odometer_after=?,daily_mileage=?,fuel_spent=?,fuel_after=? WHERE id=?
+        ")->execute([$odomAfter, $dist, $fuelSpent, $fuelAfter, $id]);
+        saveSegments($db, $id, $route['segments']);
+
+        // Update logbook row
+        $stmt = $db->prepare("SELECT id FROM logbook WHERE waybill_id=?");
+        $stmt->execute([$id]);
+        $logRow = $stmt->fetch();
+        if ($logRow) {
+            $lid = (int)$logRow['id'];
+            $prev = $db->prepare("SELECT since_to2 FROM logbook WHERE id < ? ORDER BY id DESC LIMIT 1");
+            $prev->execute([$lid]);
+            $pRow     = $prev->fetch();
+            $to2After = ((float)($pRow['since_to2'] ?? 0)) + $dist;
+            $dailyFuel = round((float)$w['fuel_refueled'] - $fuelSpent, 1);
+            $db->prepare("
+                UPDATE logbook SET odometer=?,daily_mileage=?,since_to2=?,fuel_remaining=?,daily_fuel=? WHERE id=?
+            ")->execute([$odomAfter, $dist, $to2After, $fuelAfter, $dailyFuel, $lid]);
+        }
+        $db->commit();
+    } catch (Throwable $error) {
+        $db->rollBack();
+        throw $error;
     }
 
     // Re-fetch GET param spoof
@@ -347,7 +385,15 @@ function actionDeleteEdge(PDO $db): array {
 
 // ─── Route Generation ──────────────────────────────────────────────────────
 
-function generateRoute(PDO $db, float $fuelRefueled, string $refuelTime, array $settings, ?int $seed = null): ?array {
+function generateRoute(
+    PDO $db,
+    float $fuelRefueled,
+    string $refuelTime,
+    array $settings,
+    ?int $seed = null,
+    ?array $options = null,
+    ?float $targetDistance = null
+): ?array {
     $data  = actionGetLocations($db);
     $locs  = $data['locations'];
     $edges = $data['edges'];
@@ -366,8 +412,15 @@ function generateRoute(PDO $db, float $fuelRefueled, string $refuelTime, array $
     $adj = [];
     foreach ($locs as $l) $adj[(int)$l['id']] = [];
     foreach ($edges as $e) {
-        $adj[(int)$e['loc_a']][] = ['to' => (int)$e['loc_b'], 'dist' => (float)$e['distance']];
-        $adj[(int)$e['loc_b']][] = ['to' => (int)$e['loc_a'], 'dist' => (float)$e['distance']];
+        $a = (int)$e['loc_a'];
+        $b = (int)$e['loc_b'];
+        $dist = (float)$e['distance'];
+        if ($options !== null) {
+            $dist = max(0.1, round($dist, 1));
+        }
+        $country = $locMap[$a]['type'] === 'countryside' || $locMap[$b]['type'] === 'countryside';
+        $adj[$a][] = ['to' => $b, 'dist' => $dist, 'country' => $country];
+        $adj[$b][] = ['to' => $a, 'dist' => $dist, 'country' => $country];
     }
     if (empty($adj[$startId])) return null;
 
@@ -376,9 +429,42 @@ function generateRoute(PDO $db, float $fuelRefueled, string $refuelTime, array $
 
     if ($seed !== null) mt_srand($seed);
 
-    // Dijkstra distances FROM each node back to start (= from start, symmetric)
     $dStart = dijkstraDist($adj, $startId);
+    if ($options === null || $targetDistance === null) {
+        // The mileage estimate uses the same walks for all four settings.
+        $randomizer = $options === null ? null : new Random\Randomizer(new Random\Engine\Mt19937(0));
+        $baseline = findBaselineRoute($adj, $startId, $dStart, $locMap, $fuelRefueled, $rate, $coeff, $randomizer);
+        if ($baseline === null) return null;
+        $targetDistance = $baseline['totalDist'];
+    }
 
+    if ($options === null) {
+        $route = $baseline;
+    } else {
+        $route = optimizeRoute($adj, $startId, $dStart, $targetDistance, $options);
+        if ($route === null) return null;
+        $countryKm = $route['countryDistance'];
+        $cityKm = $targetDistance - $countryKm;
+        $route['fuelSpent'] = round(($cityKm + $countryKm * $coeff) * $rate / 100.0, 2);
+    }
+
+    return [
+        'segments' => buildSegments($route['path'], $adj, $refuelTime, $targetDistance),
+        'totalDist' => $targetDistance,
+        'fuelSpent' => $route['fuelSpent'],
+    ];
+}
+
+function findBaselineRoute(
+    array $adj,
+    int $startId,
+    array $dStart,
+    array $locMap,
+    float $fuelRefueled,
+    float $rate,
+    float $coeff,
+    ?Random\Randomizer $randomizer
+): ?array {
     $best     = null;
     $bestDiff = PHP_FLOAT_MAX;
 
@@ -387,7 +473,7 @@ function generateRoute(PDO $db, float $fuelRefueled, string $refuelTime, array $
         $targetRate = ($att % 3 === 0) ? $rate : $rate * $coeff;
         $target     = $fuelRefueled * 100.0 / $targetRate;
 
-        $res = randomWalk($adj, $startId, $target, $dStart);
+        $res = randomWalk($adj, $startId, $target, $dStart, $randomizer);
         if (!$res) continue;
         [$path, $totalDist] = $res;
 
@@ -407,13 +493,70 @@ function generateRoute(PDO $db, float $fuelRefueled, string $refuelTime, array $
         if ($diff < 0.3) break;
     }
 
-    if (!$best) return null;
-
-    $segs = buildSegments($best['path'], $adj, $refuelTime, $best['totalDist']);
-    return ['segments' => $segs, 'totalDist' => $best['totalDist'], 'fuelSpent' => $best['fuelSpent']];
+    return $best;
 }
 
-function randomWalk(array $adj, int $startId, float $target, array $dStart): ?array {
+// Distances are integer tenths of a kilometre, matching the graph editor.
+function optimizeRoute(array $adj, int $startId, array $dStart, float $distance, array $options): ?array {
+    $target = (int)round($distance * 10);
+    $minimum = $options['segment_mode'] === 'minimum';
+    $countrySign = $options['fuel_mode'] === 'consumption' ? -1 : 1;
+
+    // At each (distance, location), keep the best prefix. Future choices
+    // depend only on the current location and the remaining distance.
+    $states = [0 => [$startId => [0, 0, 0, $startId]]];
+    $levels = new SplPriorityQueue();
+    $levels->insert(0, 0);
+    $stateCount = 1;
+    while (!$levels->isEmpty()) {
+        $used = $levels->extract();
+        if ($used === $target) break;
+        foreach ($states[$used] as $node => [$steps, $country]) {
+            foreach ($adj[$node] as $edge) {
+                $next = $edge['to'];
+                $length = (int)round($edge['dist'] * 10);
+                $newDistance = $used + $length;
+                if ($newDistance + round($dStart[$next] * 10) > $target) continue;
+
+                $newSteps = $steps + 1;
+                $newCountry = $country + ($edge['country'] ? $length : 0);
+                $existing = $states[$newDistance][$next] ?? null;
+                if ($existing !== null) {
+                    $comparison = $minimum ? $newSteps <=> $existing[0] : 0;
+                    if ($comparison === 0) {
+                        $comparison = ($newCountry * $countrySign) <=> ($existing[1] * $countrySign);
+                    }
+                    if ($comparison > 0 || ($comparison === 0 && ($minimum || mt_rand(0, 1) === 0))) continue;
+                } elseif (++$stateCount > 100000) {
+                    throw new RuntimeException('Маршрут слишком сложен для подбора при этом километраже');
+                }
+
+                if (!isset($states[$newDistance])) {
+                    $levels->insert($newDistance, -$newDistance);
+                }
+                $states[$newDistance][$next] = [$newSteps, $newCountry, $used, $node];
+            }
+        }
+    }
+
+    if ($target <= 0 || !isset($states[$target][$startId])) return null;
+    $country = $states[$target][$startId][1];
+    $path = [$startId];
+    $node = $startId;
+    for ($used = $target; $used > 0;) {
+        [, , $used, $node] = $states[$used][$node];
+        $path[] = $node;
+    }
+    return ['path' => array_reverse($path), 'countryDistance' => $country / 10];
+}
+
+function randomWalk(
+    array $adj,
+    int $startId,
+    float $target,
+    array $dStart,
+    ?Random\Randomizer $randomizer = null
+): ?array {
     $path  = [$startId];
     $dist  = 0.0;
     $cur   = $startId;
@@ -442,7 +585,11 @@ function randomWalk(array $adj, int $startId, float $target, array $dStart): ?ar
         }
 
         // Filter valid moves (won't overshoot by more than 30 km)
-        shuffle($neighbors);
+        if ($randomizer === null) {
+            shuffle($neighbors);
+        } else {
+            $neighbors = $randomizer->shuffleArray($neighbors);
+        }
         $valid = array_filter($neighbors, function($nb) use ($dist, $target, $dStart) {
             $nd = $dist + $nb['dist'] + ($dStart[$nb['to']] ?? PHP_FLOAT_MAX);
             return $nd <= $target + 30;
