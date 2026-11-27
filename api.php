@@ -528,7 +528,8 @@ function findBaselineRoute(
 function optimizeRoute(array $adj, int $startId, array $dStart, float $distance, array $options): ?array {
     $target = (int)round($distance * 10);
     $minimum = $options['segment_mode'] === 'minimum';
-    $countrySign = $options['fuel_mode'] === 'consumption' ? -1 : 1;
+    $maximizeCountry = $options['fuel_mode'] === 'consumption';
+    $countrySign = $maximizeCountry ? -1 : 1;
 
     // At each (distance, location), keep the best prefix. Future choices
     // depend only on the current location and the remaining distance.
@@ -550,10 +551,9 @@ function optimizeRoute(array $adj, int $startId, array $dStart, float $distance,
                 $newCountry = $country + ($edge['country'] ? $length : 0);
                 $existing = $states[$newDistance][$next] ?? null;
                 if ($existing !== null) {
-                    $comparison = $minimum ? $newSteps <=> $existing[0] : 0;
-                    if ($comparison === 0) {
-                        $comparison = ($newCountry * $countrySign) <=> ($existing[1] * $countrySign);
-                    }
+                    $bySteps = $minimum ? $newSteps <=> $existing[0] : 0;
+                    $byCountry = ($newCountry <=> $existing[1]) * $countrySign;
+                    $comparison = $maximizeCountry ? ($byCountry ?: $bySteps) : ($bySteps ?: $byCountry);
                     if ($comparison > 0 || ($comparison === 0 && ($minimum || mt_rand(0, 1) === 0))) continue;
                 } elseif (++$stateCount > 100000) {
                     throw new RuntimeException('Маршрут слишком сложен для подбора при этом километраже');
